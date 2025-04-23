@@ -17,17 +17,20 @@ class SummaryRequest(BaseModel):
     page_id: str
     summary: str
 
-# ✅ 학습 계획 페이지 생성 API
+# 학습 계획 페이지 생성 API
 @app.post("/create_page")
 def create_page(req: PageRequest):
     notion_db_id, learning_db_id = get_learning_database_by_title(req.db_title)
+    print(f"요청 받음: {req}")
+    print(notion_db_id)
+    print(req.db_title)
     if not notion_db_id or not learning_db_id:
         return { "error": "해당 제목의 DB를 찾을 수 없습니다." }
 
     create_learning_pages(req.plans, notion_db_id, learning_db_id)
     return { "status": "created", "count": len(req.plans) }
 
-# ✅ 요약 블록 내용 업데이트 API
+# 요약 블록 내용 업데이트 API
 @app.post("/fill_summary")
 def fill_summary(req: SummaryRequest):
     ai_block_id = get_ai_block_id_by_page_id(req.page_id)
