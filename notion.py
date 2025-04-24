@@ -1,6 +1,11 @@
 import requests
 import json
+import os
+from dotenv import load_dotenv
 
+load_dotenv()
+
+SUPABASE_API_KEY = os.getenv("NOTION_TOKEN")
 NOTION_TOKEN = "ntn_C58327611023N5xC6lu9H8zMIAuC2rmL225aGylmNQdbC7"
 NOTION_VERSION = "2022-06-28"
 
