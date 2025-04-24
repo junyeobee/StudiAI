@@ -1,11 +1,12 @@
 from supabase import create_client
 from dotenv import load_dotenv
 import os
+import datetime
 
 load_dotenv()
 
 SUPABASE_URL = "https://gawybycxbfvfahjsxaaj.supabase.co"
-SUPABASE_API_KEY = os.getenv("SUPABASE_KEY")
+SUPABASE_API_KEY = os.getenv("SUPABASE_API_KEY")
 
 supabase = create_client(SUPABASE_URL, SUPABASE_API_KEY)
 
@@ -49,7 +50,7 @@ def update_ai_block_id(page_id, new_ai_block_id):
     res = supabase.table("learning_pages").update({"ai_block_id": new_ai_block_id}).eq("page_id", page_id).execute()
     print(res)
 
-# 페이지 아이디 가져오기
+# 페이지 ID 가져오기
 def get_ai_block_id_by_page_id(page_id):
     res = supabase.table("learning_pages").select("ai_block_id").eq("page_id", page_id).execute()
     data = res.data
@@ -57,7 +58,7 @@ def get_ai_block_id_by_page_id(page_id):
         return data[0]["ai_block_id"]
     return None
 
-# 6. 상태가 'used'인 학습 데이터베이스 조회
+# 상태가 'used'인 학습 DB 조회
 def get_active_learning_database():
     res = supabase.table("learning_databases").select("id, db_id, title, parent_page_id").eq("status", "used").execute()
     data = res.data
@@ -67,17 +68,87 @@ def get_active_learning_database():
         return data[0]
     return None
 
-# 7. 학습 데이터베이스 상태 업데이트
+# 학습 DB 상태 업데이트
 def update_learning_database_status(db_id, status):
     res = supabase.table("learning_databases").update({"status": status, "updated_at": "now()"}).eq("db_id", db_id).execute()
     return res
 
-# 8. 마지막 사용일 업데이트
+# 마지막 사용일 업데이트
 def update_last_used_date(id):
     res = supabase.table("learning_databases").update({"last_used_date": "now()", "updated_at": "now()"}).eq("id", id).execute()
     return res
 
-# 9. 사용 가능한 모든 학습 데이터베이스 조회 (ready 상태)
+# 사용 가능 학습 DB 조회 (ready 상태)
 def get_available_learning_databases():
     res = supabase.table("learning_databases").select("id, db_id, title, parent_page_id").eq("status", "ready").execute()
     return res.data
+
+# DB 웹훅 정보 업데이트
+def update_webhook_info(db_id, webhook_id, status="active"):
+    res = supabase.table("learning_databases").update({
+        "webhook_id": webhook_id,
+        "webhook_status": status,
+        "updated_at": datetime.now().isoformat()
+    }).eq("db_id", db_id).execute()
+    
+    if res.data and len(res.data) > 0:
+        return res.data[0]
+    return None
+
+# DB 웹훅 정보 조회
+def get_webhook_info(db_id):
+    res = supabase.table("learning_databases").select("webhook_id, webhook_status").eq("db_id", db_id).execute()
+    if res.data and len(res.data) > 0:
+        return res.data[0]
+    return None
+
+# DB 상태 업데이트
+def update_learning_database_status(db_id, new_status):
+    """
+    학습 데이터베이스 상태 업데이트
+    
+    Args:
+        db_id: Notion 데이터베이스 ID
+        new_status: 새 상태 (ready, used, end)
+    """
+    # 'used'로 변경하는 경우, 기존 used DB를 ready로 변경
+    if new_status == "used":
+        supabase.table("learning_databases").update({
+            "status": "ready",
+            "updated_at": datetime.now().isoformat()
+        }).eq("status", "used").execute()
+    
+    # 지정된 DB 상태 변경
+    res = supabase.table("learning_databases").update({
+        "status": new_status,
+        "last_used_date": datetime.today().strftime("%Y-%m-%d"),
+        "updated_at": datetime.now().isoformat()
+    }).eq("db_id", db_id).execute()
+    
+    if res.data and len(res.data) > 0:
+        return res.data[0]
+    return None
+
+# 모든 학습 DB 조회
+def list_all_learning_databases(status=None):
+    """
+    모든 학습 DB 조회 (상태 필터 옵션)
+    
+    Args:
+        status: 필터링할 상태 (ready, used, end) - None이면 모든 상태 반환
+    """
+    query = supabase.table("learning_databases").select("id, db_id, title, status, last_used_date, created_at, updated_at, webhook_id, webhook_status")
+    
+    if status:
+        query = query.eq("status", status)
+    
+    res = query.order("updated_at", desc=True).execute()
+    return res.data
+
+# DB ID로 학습 DB 조회
+def get_learning_database_by_id(db_id):
+    """DB ID로 학습 DB 조회"""
+    res = supabase.table("learning_databases").select("*").eq("db_id", db_id).execute()
+    if res.data and len(res.data) > 0:
+        return res.data[0]
+    return None
