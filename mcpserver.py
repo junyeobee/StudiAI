@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("studyai")
 
 # StudyAI API 서버 주소
-STUDYAI_API = "https://smart-referring-plot-portsmouth.trycloudflare.com"
+STUDYAI_API = "https://circular-dh-housewares-locator.trycloudflare.com"
 
 WEBHOOK_CREATE_URL = "https://hook.eu2.make.com/39qh7m7j3ghar2r52i6w8aygn5n1526c"  # 웹훅 생성 시나리오 URL
 WEBHOOK_DELETE_URL = "https://hook.eu1.make.com/hijklmn67890"  # 웹훅 삭제 시나리오 URL
@@ -101,12 +101,36 @@ async def list_learning_databases() -> str:
             return f"데이터베이스 목록 조회 중 오류 발생: {str(e)}"
 
 @mcp.tool()
+async def list_databases_in_parent_page(parent_page_id: str) -> str:
+    """부모 페이지 내의 모든 데이터베이스를 조회합니다.
+    
+    Args:
+        parent_page_id: 부모 페이지의 Notion ID
+    """
+    url = f"{STUDYAI_API}/page_databases/{parent_page_id}"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            dbs = data.get("databases", [])
+            if not dbs:
+                return "해당 페이지에서 데이터베이스를 찾을 수 없습니다."
+            
+            db_list = "\n".join([f"- {db.get('title')} (ID: {db.get('id')})" for db in dbs])
+            return f"페이지 내 데이터베이스 목록:\n{db_list}"
+        except Exception as e:
+            return f"데이터베이스 목록 조회 중 오류 발생: {str(e)}"
+
+@mcp.tool()
 async def register_new_database(parent_page_id: str, db_id: str, title: str) -> str:
     """새로운 학습 데이터베이스를 등록합니다.
     
     Args:
-        parent_page_id: Notion 부모 페이지 ID
-        db_id: Notion 데이터베이스 ID
+        parent_page_id: 부모 페이지의 Notion ID
+        db_id: 데이터베이스의 Notion ID
         title: 데이터베이스 제목
     """
     url = f"{STUDYAI_API}/register_database"
@@ -120,121 +144,136 @@ async def register_new_database(parent_page_id: str, db_id: str, title: str) -> 
         try:
             response = await client.post(url, json=payload, timeout=30.0)
             response.raise_for_status()
-            return f"새로운 학습 데이터베이스 '{title}'이 성공적으로 등록되었습니다."
+            return f"성공적으로 데이터베이스가 등록되었습니다: {title}"
         except Exception as e:
             return f"데이터베이스 등록 중 오류 발생: {str(e)}"
 
-
-# 여기서 문제 있음.
-# 지금 webhook
 @mcp.tool()
 async def activate_learning_database(db_id: str) -> str:
-    """학습 데이터베이스를 활성화하고 웹훅을 설정합니다.
+    """학습 데이터베이스를 활성화합니다.
     
     Args:
-        db_id: 활성화할 Notion 데이터베이스 ID
+        db_id: 활성화할 데이터베이스의 Notion ID
     """
-    # 1. DB 상태를 'used'로 설정
-    status_url = f"{STUDYAI_API}/update_db_status"
-    status_payload = {"db_id": db_id, "status": "used"}
-    
-    # 2. Make.com 웹훅 생성 트리거
-    webhook_payload = {
-        "action": "create_webhook",
-        "db_id": db_id,
-        "source": "mcp_activation"
-    }
+    url = f"{STUDYAI_API}/activate_database"
+    payload = {"db_id": db_id}
     
     async with httpx.AsyncClient() as client:
         try:
-            # DB 상태 업데이트
-            status_response = await client.post(status_url, json=status_payload, timeout=30.0)
-            status_response.raise_for_status()
-            status_data = status_response.json()
-            
-            # 웹훅 생성 트리거
-            webhook_response = await client.post(WEBHOOK_CREATE_URL, json=webhook_payload, timeout=30.0)
-            webhook_response.raise_for_status()
-            
-            return f"'{status_data['title']}' 데이터베이스가 활성화되었으며 웹훅이 설정되었습니다."
+            response = await client.post(url, json=payload, timeout=30.0)
+            response.raise_for_status()
+            return f"데이터베이스가 성공적으로 활성화되었습니다."
         except Exception as e:
             return f"데이터베이스 활성화 중 오류 발생: {str(e)}"
 
 @mcp.tool()
 async def deactivate_learning_database(db_id: str, end_status: bool = False) -> str:
-    """학습 데이터베이스를 비활성화하고 웹훅을 제거합니다.
+    """학습 데이터베이스를 비활성화합니다.
     
     Args:
-        db_id: 비활성화할 Notion 데이터베이스 ID
-        end_status: True면 'end' 상태로, False면 'ready' 상태로 설정
+        db_id: 비활성화할 데이터베이스의 Notion ID
+        end_status: 학습 완료 상태로 설정할지 여부
     """
-    # 1. DB 상태 변경
-    status_url = f"{STUDYAI_API}/update_db_status"
-    status_payload = {
-        "db_id": db_id, 
-        "status": "end" if end_status else "ready"
-    }
-    
-    # 2. Make.com 웹훅 제거 트리거
-    webhook_payload = {
-        "action": "delete_webhook",
-        "db_id": db_id,
-        "source": "mcp_deactivation"
-    }
+    url = f"{STUDYAI_API}/deactivate_database/{db_id}"
+    payload = {"end_status": end_status}
     
     async with httpx.AsyncClient() as client:
         try:
-            # DB 상태 업데이트
-            status_response = await client.post(status_url, json=status_payload, timeout=30.0)
-            status_response.raise_for_status()
-            status_data = status_response.json()
-            
-            # 웹훅 제거 트리거
-            webhook_response = await client.post(WEBHOOK_DELETE_URL, json=webhook_payload, timeout=30.0)
-            webhook_response.raise_for_status()
-            
-            new_status = "완료" if end_status else "대기"
-            return f"'{status_data['title']}' 데이터베이스가 {new_status} 상태로 변경되었으며 웹훅이 제거되었습니다."
+            response = await client.post(url, json=payload, timeout=30.0)
+            response.raise_for_status()
+            return f"데이터베이스가 성공적으로 비활성화되었습니다."
         except Exception as e:
             return f"데이터베이스 비활성화 중 오류 발생: {str(e)}"
 
 @mcp.tool()
 async def complete_learning_database(db_id: str) -> str:
-    """학습 데이터베이스를 완료 상태로 변경합니다.
+    """학습 데이터베이스를 완료 상태로 설정합니다.
     
     Args:
-        db_id: 완료할 Notion 데이터베이스 ID
+        db_id: 완료 처리할 데이터베이스의 Notion ID
     """
-    return await deactivate_learning_database(db_id, True)
+    return await deactivate_learning_database(db_id, end_status=True)
 
 @mcp.tool()
-async def list_databases_in_parent_page(parent_page_id: str) -> str:
-    """최상위 페이지에 있는 데이터베이스 목록을 조회합니다.
-    
-    Args:
-        parent_page_id: Notion 최상위 페이지 ID
-    """
-    url = f"{STUDYAI_API}/list_db_in_page?parent_page_id={parent_page_id}"
+async def start_monitoring_all_databases() -> str:
+    """모든 데이터베이스의 모니터링을 시작합니다."""
+    url = f"{STUDYAI_API}/monitor_all"
     
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(url, timeout=30.0)
+            response = await client.post(url, timeout=30.0)
             response.raise_for_status()
             data = response.json()
             
-            if "error" in data:
-                return f"데이터베이스 조회 실패: {data['error']}"
-            
-            if not data or len(data) == 0:
-                return "페이지에 데이터베이스가 없습니다."
-            
-            result = "페이지에 있는 데이터베이스 목록:"
-            for db in data:
-                result += f"\n- {db['title']} (ID: {db['id']})"
-            
-            return result
+            return f"""
+                모니터링 시작 결과:
+                - 총 데이터베이스: {data.get('total', 0)}
+                - 성공: {data.get('success', 0)}
+                - 스킵: {data.get('skipped', 0)}
+                - 실패: {data.get('failed', 0)}
+                """
         except Exception as e:
-            return f"데이터베이스 목록 조회 중 오류 발생: {str(e)}"
+            return f"모니터링 시작 중 오류 발생: {str(e)}"
+
+@mcp.tool()
+async def stop_monitoring_all_databases() -> str:
+    """모든 데이터베이스의 모니터링을 중지합니다."""
+    url = f"{STUDYAI_API}/unmonitor_all"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, timeout=30.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            return f"""
+                모니터링 중지 결과:
+                - 총 데이터베이스: {data.get('total', 0)}
+                - 성공: {data.get('success', 0)}
+                - 실패: {data.get('failed', 0)}
+                """
+        except Exception as e:
+            return f"모니터링 중지 중 오류 발생: {str(e)}"
+
+@mcp.tool()
+async def verify_database_monitoring() -> str:
+    """모든 데이터베이스의 모니터링 상태를 검증합니다."""
+    url = f"{STUDYAI_API}/verify_webhooks"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, timeout=30.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            return f"""
+                모니터링 검증 결과:
+                - 총 웹훅: {data.get('total', 0)}
+                - 성공: {data.get('success', 0)}
+                - 실패: {data.get('failed', 0)}
+                """
+        except Exception as e:
+            return f"모니터링 검증 중 오류 발생: {str(e)}"
+
+@mcp.tool()
+async def retry_failed_monitoring_operations() -> str:
+    """실패한 모니터링 작업을 재시도합니다."""
+    url = f"{STUDYAI_API}/retry_failed_operations"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(url, timeout=30.0)
+            response.raise_for_status()
+            data = response.json()
+            
+            return f"""
+                재시도 결과:
+                - 총 작업: {data.get('total', 0)}
+                - 성공: {data.get('success', 0)}
+                - 실패: {data.get('failed', 0)}
+                """
+        except Exception as e:
+            return f"재시도 중 오류 발생: {str(e)}"
 
 # 서버 실행
 if __name__ == "__main__":

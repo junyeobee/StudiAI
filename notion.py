@@ -2,15 +2,14 @@ import requests
 import json
 import os
 from dotenv import load_dotenv
+from app.core.config import settings
 
 load_dotenv()
 
-SUPABASE_API_KEY = os.getenv("NOTION_TOKEN")
-NOTION_TOKEN = "ntn_C58327611023N5xC6lu9H8zMIAuC2rmL225aGylmNQdbC7"
-NOTION_VERSION = "2022-06-28"
+NOTION_VERSION = settings.NOTION_API_VERSION
 
 headers = {
-    "Authorization": f"Bearer {NOTION_TOKEN}",
+    "Authorization": f"Bearer {settings.NOTION_API_KEY}",
     "Content-Type": "application/json",
     "Notion-Version": NOTION_VERSION
 }

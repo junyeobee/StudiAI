@@ -1,0 +1,2 @@
+2025-04-25 18:01:43 - webhook - INFO - Starting verification of 0 active webhooks
+2025-04-25 18:01:44 - webhook - INFO - Webhook verification completed: {'total': 0, 'verified': 0, 'failed': 0, 'errors': []}
