@@ -1,2 +1,17 @@
 2025-04-25 18:01:43 - webhook - INFO - Starting verification of 0 active webhooks
 2025-04-25 18:01:44 - webhook - INFO - Webhook verification completed: {'total': 0, 'verified': 0, 'failed': 0, 'errors': []}
+2025-04-25 18:07:16 - notion - ERROR - Notion API 占쏙옙청 占쏙옙占쏙옙: Client error '400 Bad Request' for url 'https://api.notion.com/v1/databases'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2025-04-25 19:19:53 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
+2025-04-25 19:21:30 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
+2025-04-25 19:25:21 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
+2025-04-25 19:31:53 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
+2025-04-25 19:39:08 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
+2025-04-25 19:53:39 - notion - ERROR - Notion API 요청 실패: 
+2025-04-25 19:59:04 - api - ERROR - 데이터베이스 목록 조회 실패: name 'list_all_learning_databases' is not defined
+2025-04-25 19:59:12 - api - ERROR - 데이터베이스 목록 조회 실패: name 'list_all_learning_databases' is not defined
+2025-04-25 20:00:00 - notion - ERROR - Notion API 요청 실패: Client error '400 Bad Request' for url 'https://api.notion.com/v1/databases/15415ba8-df0e-80e4-83e4-bcf738689aecc'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2025-04-25 20:00:16 - notion - ERROR - Notion API 요청 실패: Client error '400 Bad Request' for url 'https://api.notion.com/v1/databases/15415ba8-df0e-80e4-83e4-bcf738689aecc'
+For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
+2025-04-25 20:03:14 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
