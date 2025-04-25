@@ -7,11 +7,11 @@ For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/St
 2025-04-25 19:25:21 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
 2025-04-25 19:31:53 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
 2025-04-25 19:39:08 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
-2025-04-25 19:53:39 - notion - ERROR - Notion API ¿äÃ» ½ÇÆÐ: 
-2025-04-25 19:59:04 - api - ERROR - µ¥ÀÌÅÍº£ÀÌ½º ¸ñ·Ï Á¶È¸ ½ÇÆÐ: name 'list_all_learning_databases' is not defined
-2025-04-25 19:59:12 - api - ERROR - µ¥ÀÌÅÍº£ÀÌ½º ¸ñ·Ï Á¶È¸ ½ÇÆÐ: name 'list_all_learning_databases' is not defined
-2025-04-25 20:00:00 - notion - ERROR - Notion API ¿äÃ» ½ÇÆÐ: Client error '400 Bad Request' for url 'https://api.notion.com/v1/databases/15415ba8-df0e-80e4-83e4-bcf738689aecc'
+2025-04-25 19:53:39 - notion - ERROR - Notion API ï¿½ï¿½Ã» ï¿½ï¿½ï¿½ï¿½: 
+2025-04-25 19:59:04 - api - ERROR - ï¿½ï¿½ï¿½ï¿½ï¿½Íºï¿½ï¿½Ì½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½È¸ ï¿½ï¿½ï¿½ï¿½: name 'list_all_learning_databases' is not defined
+2025-04-25 19:59:12 - api - ERROR - ï¿½ï¿½ï¿½ï¿½ï¿½Íºï¿½ï¿½Ì½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½È¸ ï¿½ï¿½ï¿½ï¿½: name 'list_all_learning_databases' is not defined
+2025-04-25 20:00:00 - notion - ERROR - Notion API ï¿½ï¿½Ã» ï¿½ï¿½ï¿½ï¿½: Client error '400 Bad Request' for url 'https://api.notion.com/v1/databases/15415ba8-df0e-80e4-83e4-bcf738689aecc'
 For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
-2025-04-25 20:00:16 - notion - ERROR - Notion API ¿äÃ» ½ÇÆÐ: Client error '400 Bad Request' for url 'https://api.notion.com/v1/databases/15415ba8-df0e-80e4-83e4-bcf738689aecc'
+2025-04-25 20:00:16 - notion - ERROR - Notion API ï¿½ï¿½Ã» ï¿½ï¿½ï¿½ï¿½: Client error '400 Bad Request' for url 'https://api.notion.com/v1/databases/15415ba8-df0e-80e4-83e4-bcf738689aecc'
 For more information check: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status/400
 2025-04-25 20:03:14 - api - INFO - Retrieved database info for ID: 1d415ba8-df0e-8182-bf86-ca34bcce11a5
