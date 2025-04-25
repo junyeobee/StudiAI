@@ -9,6 +9,7 @@ from app.core.exceptions import NotionAPIError
 from app.utils.logger import notion_logger
 from app.models.database import DatabaseInfo, DatabaseStatus
 from app.models.learning import LearningPlan, LearningStatus
+from supa import get_db_info_by_id
 
 class NotionService:
     def __init__(self):
@@ -60,12 +61,18 @@ class NotionService:
     async def get_database(self, database_id: str) -> DatabaseInfo:
         """데이터베이스 정보 조회"""
         response = await self._make_request("GET", f"databases/{database_id}")
+        
+        # Supabase에서 데이터베이스 상태 조회
+        db_info = get_db_info_by_id(database_id)
+        
         return DatabaseInfo(
             db_id=response["id"],
             title=response["title"][0]["text"]["content"],
             parent_page_id=response["parent"]["page_id"],
-            status=DatabaseStatus.READY,
-            last_used_date=datetime.now()
+            status=db_info.get("status", DatabaseStatus.READY) if db_info else DatabaseStatus.READY,
+            last_used_date=db_info.get("last_used_date", datetime.now()) if db_info else datetime.now(),
+            webhook_id=db_info.get("webhook_id") if db_info else None,
+            webhook_status=db_info.get("webhook_status", "inactive") if db_info else "inactive"
         )
 
     async def create_learning_page(self, database_id: str, plan: LearningPlan) -> str:
