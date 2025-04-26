@@ -10,15 +10,159 @@ load_dotenv()
 
 supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
 
-# 최상위 학습 DB 정보 저장
-def insert_learning_database(db_id, title, parent_page_id):
-    data = {
-        "db_id": db_id,
-        "title": title,
-        "parent_page_id": parent_page_id
-    }
-    res = supabase.table("learning_databases").insert(data).execute()
-    print(res)
+def insert_learning_database(db_id: str, title: str, parent_page_id: str) -> bool:
+    """새로운 학습 데이터베이스 등록"""
+    try:
+        data = {
+            "db_id": db_id,
+            "title": title,
+            "parent_page_id": parent_page_id,
+            "status": "ready",
+            "created_at": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }
+        res = supabase.table("learning_databases").insert(data).execute()
+        return bool(res.data)
+    except Exception as e:
+        api_logger.error(f"데이터베이스 등록 실패: {str(e)}")
+        return False
+
+def get_learning_database_by_title(title: str) -> tuple:
+    """제목으로 학습 데이터베이스 정보 조회"""
+    try:
+        res = supabase.table("learning_databases").select("id, db_id").eq("title", title).execute()
+        data = res.data
+        if data:
+            return data[0]["db_id"], data[0]["id"]
+        return None, None
+    except Exception as e:
+        api_logger.error(f"데이터베이스 조회 실패: {str(e)}")
+        return None, None
+
+def get_active_learning_database() -> dict:
+    """현재 활성화된 학습 데이터베이스 조회"""
+    try:
+        res = supabase.table("learning_databases").select("*").eq("status", "used").execute()
+        data = res.data
+        if data:
+            # 마지막 사용일 업데이트
+            update_last_used_date(data[0]["id"])
+            return data[0]
+        return None
+    except Exception as e:
+        api_logger.error(f"활성 데이터베이스 조회 실패: {str(e)}")
+        return None
+
+def update_learning_database_status(db_id: str, status: str) -> dict:
+    """학습 데이터베이스 상태 업데이트"""
+    try:
+        # 'used'로 변경하는 경우, 기존 used DB를 ready로 변경
+        if status == "used":
+            supabase.table("learning_databases").update({
+                "status": "ready",
+                "updated_at": datetime.now().isoformat()
+            }).eq("status", "used").execute()
+        
+        # 지정된 DB 상태 변경
+        update_data = {
+            "status": status,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        if status == "used":
+            update_data["last_used_date"] = datetime.now().isoformat()
+        
+        res = supabase.table("learning_databases").update(update_data).eq("db_id", db_id).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        api_logger.error(f"데이터베이스 상태 업데이트 실패: {str(e)}")
+        return None
+
+def update_last_used_date(id: int) -> bool:
+    """마지막 사용일 업데이트"""
+    try:
+        res = supabase.table("learning_databases").update({
+            "last_used_date": datetime.now().isoformat(),
+            "updated_at": datetime.now().isoformat()
+        }).eq("id", id).execute()
+        return bool(res.data)
+    except Exception as e:
+        api_logger.error(f"마지막 사용일 업데이트 실패: {str(e)}")
+        return False
+
+def get_available_learning_databases() -> list:
+    """사용 가능한 학습 데이터베이스 목록 조회"""
+    try:
+        res = supabase.table("learning_databases").select("*").eq("status", "ready").execute()
+        return res.data
+    except Exception as e:
+        api_logger.error(f"사용 가능한 데이터베이스 조회 실패: {str(e)}")
+        return []
+
+def list_all_learning_databases(status: str = None) -> list:
+    """모든 학습 데이터베이스 목록 조회"""
+    try:
+        query = supabase.table("learning_databases").select("*")
+        if status:
+            query = query.eq("status", status)
+        res = query.order("updated_at", desc=True).execute()
+        return res.data
+    except Exception as e:
+        api_logger.error(f"데이터베이스 목록 조회 실패: {str(e)}")
+        return []
+
+def get_db_info_by_id(db_id: str) -> dict:
+    """데이터베이스 ID로 정보 조회"""
+    try:
+        res = supabase.table("learning_databases").select("*").eq("db_id", db_id).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        api_logger.error(f"데이터베이스 정보 조회 실패: {str(e)}")
+        return None
+
+def update_webhook_info(db_id: str, webhook_id: str, status: str = "active") -> dict:
+    """웹훅 정보 업데이트"""
+    try:
+        update_data = {
+            "webhook_id": webhook_id,
+            "webhook_status": status,
+            "updated_at": datetime.now().isoformat()
+        }
+        
+        if status == "error":
+            update_data["webhook_error"] = "웹훅 생성/업데이트 중 오류 발생"
+        
+        res = supabase.table("learning_databases").update(update_data).eq("db_id", db_id).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        api_logger.error(f"웹훅 정보 업데이트 실패: {str(e)}")
+        return None
+
+def get_webhook_info(db_id: str) -> dict:
+    """웹훅 정보 조회"""
+    try:
+        res = supabase.table("learning_databases").select("webhook_id, webhook_status").eq("db_id", db_id).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        api_logger.error(f"웹훅 정보 조회 실패: {str(e)}")
+        return None
+
+def log_webhook_operation(db_id: str, operation_type: str, status: str, error_message: str = None, webhook_id: str = None) -> bool:
+    """웹훅 작업 로그 기록"""
+    try:
+        data = {
+            "db_id": db_id,
+            "operation_type": operation_type,
+            "status": status,
+            "webhook_id": webhook_id,
+            "error_message": error_message,
+            "updated_at": datetime.now().isoformat()
+        }
+        res = supabase.table("webhook_operations").insert(data).execute()
+        return bool(res.data)
+    except Exception as e:
+        api_logger.error(f"웹훅 작업 로그 기록 실패: {str(e)}")
+        return False
 
 # 일자별 학습 페이지 저장
 def insert_learning_page(date, title, page_id, ai_block_id, learning_db_id):
@@ -31,14 +175,6 @@ def insert_learning_page(date, title, page_id, ai_block_id, learning_db_id):
     }
     res = supabase.table("learning_pages").insert(data).execute()
     print(res)
-
-# title 기준으로 Notion DB ID + Supabase DB UUID 조회
-def get_learning_database_by_title(title):
-    res = supabase.table("learning_databases").select("id, db_id").eq("title", title).execute()
-    data = res.data
-    if data:
-        return data[0]["db_id"], data[0]["id"]
-    return None, None
 
 # 날짜 기준 학습 페이지 조회
 def get_learning_page_by_date(date):
@@ -57,26 +193,6 @@ def get_ai_block_id_by_page_id(page_id):
     if data and "ai_block_id" in data[0]:
         return data[0]["ai_block_id"]
     return None
-
-# 상태가 'used'인 학습 DB 조회
-def get_active_learning_database():
-    res = supabase.table("learning_databases").select("id, db_id, title, parent_page_id").eq("status", "used").execute()
-    data = res.data
-    if data:
-        # last_used_date 업데이트
-        update_last_used_date(data[0]["id"])
-        return data[0]
-    return None
-
-# 학습 DB 상태 업데이트
-def update_learning_database_status(db_id, status):
-    res = supabase.table("learning_databases").update({"status": status, "updated_at": "now()"}).eq("db_id", db_id).execute()
-    return res
-
-# 마지막 사용일 업데이트
-def update_last_used_date(id):
-    res = supabase.table("learning_databases").update({"last_used_date": "now()", "updated_at": "now()"}).eq("id", id).execute()
-    return res
 
 # 사용 가능 학습 DB 조회 (ready 상태)
 def get_available_learning_databases():
@@ -103,6 +219,8 @@ def get_webhook_info(db_id):
     return None
 
 # DB 상태 업데이트
+from datetime import datetime
+
 def update_learning_database_status(db_id, new_status):
     """
     학습 데이터베이스 상태 업데이트
@@ -110,7 +228,35 @@ def update_learning_database_status(db_id, new_status):
     Args:
         db_id: Notion 데이터베이스 ID
         new_status: 새 상태 (ready, used, end)
+        
+    Returns:
+        dict: 업데이트된 데이터베이스 정보 또는 에러 메시지
     """
+    # 전체 학습 데이터베이스 목록 조회
+    all_dbs = list_all_learning_databases()
+    
+    # 학습 DB가 1개인 경우 처리
+    if len(all_dbs) == 1:
+        # 1개만 있는 경우 그 DB가 현재 요청된 DB인지 확인
+        if all_dbs[0]["db_id"] == db_id:
+            # 상태가 이미 'used'인데 'used'로 변경하려는 경우 - 중복 요청 처리
+            if all_dbs[0]["status"] == "used" and new_status == "used":
+                return {"message": "이미 활성화된 학습 DB입니다.", "db": all_dbs[0]}
+            
+            # 유일한 DB의 상태 업데이트
+            res = supabase.table("learning_databases").update({
+                "status": new_status,
+                "last_used_date": datetime.today().strftime("%Y-%m-%d"),
+                "updated_at": datetime.now().isoformat()
+            }).eq("db_id", db_id).execute()
+            
+            if res.data and len(res.data) > 0:
+                return res.data[0]
+            return {"error": "데이터베이스 업데이트 실패"}
+        else:
+            return {"error": "요청된 데이터베이스 ID가 존재하지 않습니다."}
+    
+    # 여러 DB가 있는 일반적인 경우    
     # 'used'로 변경하는 경우, 기존 used DB를 ready로 변경
     if new_status == "used":
         supabase.table("learning_databases").update({
@@ -127,7 +273,7 @@ def update_learning_database_status(db_id, new_status):
     
     if res.data and len(res.data) > 0:
         return res.data[0]
-    return None
+    return {"error": "데이터베이스 업데이트 실패"}
 
 # 모든 학습 DB 조회
 def list_all_learning_databases(status=None):
@@ -264,6 +410,7 @@ def list_all_learning_databases():
     """모든 학습 데이터베이스 목록을 반환합니다."""
     try:
         res = supabase.table("learning_databases").select("*").order("updated_at", desc=True).execute()
+        print(res)
         return res.data
     except Exception as e:
         print(f"DB 목록 조회 오류: {str(e)}")

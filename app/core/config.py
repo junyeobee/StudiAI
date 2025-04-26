@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     # Notion API 설정
     NOTION_API_KEY: str
     NOTION_API_VERSION: str = "2022-06-28"
+    NOTION_PARENT_PAGE_ID: str
     
     # Supabase 설정
     SUPABASE_URL: str

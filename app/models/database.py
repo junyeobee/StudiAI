@@ -30,7 +30,6 @@ class DatabaseInfo(BaseModel):
 class DatabaseCreate(BaseModel):
     """데이터베이스 생성 요청"""
     title: str = Field(..., description="데이터베이스 제목")
-    parent_page_id: str = Field(..., description="상위 페이지 ID")
 
 class DatabaseUpdate(BaseModel):
     """데이터베이스 업데이트 요청"""
@@ -43,3 +42,8 @@ class DatabaseResponse(BaseModel):
     status: str = Field(..., description="응답 상태")
     data: DatabaseInfo = Field(..., description="데이터베이스 정보")
     message: str = Field(..., description="응답 메시지") 
+
+class DatabaseMetadata(BaseModel):
+    """페이지 안의 모든 db조회"""
+    id: str = Field(..., description="child_database 블록의 ID (해당 데이터베이스 ID)")
+    title: str = Field(..., description="데이터베이스 제목")

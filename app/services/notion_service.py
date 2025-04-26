@@ -7,9 +7,9 @@ import httpx
 from app.config.settings import settings
 from app.core.exceptions import NotionAPIError
 from app.utils.logger import notion_logger
-from app.models.database import DatabaseInfo, DatabaseStatus
+from app.models.database import DatabaseInfo, DatabaseStatus, DatabaseMetadata
 from app.models.learning import LearningPlan, LearningStatus
-from supa import get_db_info_by_id
+from supa import get_db_info_by_id, get_active_learning_database
 
 class NotionService:
     def __init__(self):
@@ -34,26 +34,29 @@ class NotionService:
             notion_logger.error(f"Notion API 요청 실패: {str(e)}")
             raise NotionAPIError(f"API 요청 실패: {str(e)}")
 
-    async def create_database(self, title: str, parent_page_id: str) -> DatabaseInfo:
+    async def create_database(self, title: str) -> str:
         """새로운 데이터베이스 생성"""
         data = {
-            "parent": {"page_id": parent_page_id},
+            "parent": {"page_id": settings.NOTION_PARENT_PAGE_ID},
             "title": [{"text": {"content": title}}],
             "properties": {
-                "Title": {"title": {}},
-                "Status": {"select": {}},
-                "Priority": {"number": {}},
-                "Tags": {"multi_select": {}},
-                "Start Date": {"date": {}},
-                "End Date": {"date": {}}
+                "학습 제목": {"title": {}},
+                "날짜": {"date": {}},
+                "진행 상태": {"select": {"options": [
+                    {"name": "시작 전", "color": "gray"},
+                    {"name": "진행중", "color": "blue"},
+                    {"name": "완료", "color": "green"}
+                ]}},
+                "복습 여부": {"checkbox": {}}
             }
         }
+        await self._make_request("POST", "databases", json=data)
         
         response = await self._make_request("POST", "databases", json=data)
         return DatabaseInfo(
             db_id=response["id"],
             title=title,
-            parent_page_id=parent_page_id,
+            parent_page_id=settings.NOTION_PARENT_PAGE_ID,
             status=DatabaseStatus.READY,
             last_used_date=datetime.now()
         )
@@ -144,4 +147,28 @@ class NotionService:
                 }
             }]
         }
-        await self._make_request("PATCH", f"blocks/{page_id}/children", json=data) 
+        await self._make_request("PATCH", f"blocks/{page_id}/children", json=data)
+
+    async def list_databases_in_page(self, page_id: str) -> List[DatabaseMetadata]:
+        """페이지에 연결된 데이터베이스 목록 조회"""
+        try:
+            resp = await self._make_request(
+                "GET",
+                f"blocks/{page_id}/children",
+                params={"page_size": 100}
+            )
+
+            return [
+                {"id": block["id"], "title": block["child_database"]["title"]}
+                for block in resp.get("results", [])
+                if block.get("type") == "child_database"
+            ]
+            
+        except Exception as e:
+            notion_logger.error(f"데이터베이스 목록 조회 실패: {str(e)}")
+            raise NotionAPIError(f"데이터베이스 목록 조회 실패: {str(e)}") 
+        
+    async def get_active_database(self) -> DatabaseInfo:
+        """활성화된 데이터베이스 조회"""
+        db_info = get_active_learning_database()
+        return db_info
