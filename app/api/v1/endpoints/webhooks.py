@@ -22,6 +22,7 @@ from app.services.supa import (
     get_failed_webhook_operations,
     update_webhook_operation_status
 )
+from app.services.notion_service import NotionService
 
 router = APIRouter()
 webhook_service = WebhookService()
@@ -38,66 +39,54 @@ class WebhookOperation(BaseModel):
     status: str = "pending"
     error_message: Optional[str] = None
 
-@router.post("/", response_model=WebhookResponse)
+@router.get("/", response_model=List[WebhookInfo])
+async def get_webhooks():
+    """웹훅 목록 조회"""
+    try:
+        notion = NotionService()
+        webhooks = await notion.get_webhooks()
+        return webhooks
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/{webhook_id}", response_model=WebhookInfo)
+async def get_webhook(webhook_id: str):
+    """특정 웹훅 정보 조회"""
+    try:
+        notion = NotionService()
+        webhook = await notion.get_webhook(webhook_id)
+        return webhook
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Webhook not found: {str(e)}")
+
+@router.post("/", response_model=WebhookInfo)
 async def create_webhook(webhook: WebhookCreate):
     """새로운 웹훅 생성"""
     try:
-        webhook_info = await webhook_service.create_webhook(webhook.db_id)
-        return WebhookResponse(
-            status="success",
-            data=webhook_info,
-            message="웹훅이 성공적으로 생성되었습니다."
-        )
-    except WebhookError as e:
+        notion = NotionService()
+        new_webhook = await notion.create_webhook(webhook)
+        return new_webhook
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.delete("/{db_id}")
-async def delete_webhook(db_id: str):
+@router.put("/{webhook_id}", response_model=WebhookInfo)
+async def update_webhook(webhook_id: str, webhook: WebhookUpdate):
+    """웹훅 정보 수정"""
+    try:
+        notion = NotionService()
+        updated_webhook = await notion.update_webhook(webhook_id, webhook)
+        return updated_webhook
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.delete("/{webhook_id}")
+async def delete_webhook(webhook_id: str):
     """웹훅 삭제"""
     try:
-        await webhook_service.delete_webhook(db_id)
-        return WebhookResponse(
-            status="success",
-            message="웹훅이 성공적으로 삭제되었습니다."
-        )
-    except WebhookError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/{db_id}", response_model=WebhookResponse)
-async def get_webhook(db_id: str):
-    """웹훅 정보 조회"""
-    try:
-        webhook_info = await webhook_service.get_webhook_info(db_id)
-        if not webhook_info:
-            return WebhookResponse(
-                status="success",
-                data=WebhookInfo(db_id=db_id),
-                message="웹훅 정보를 찾을 수 없습니다."
-            )
-        
-        return WebhookResponse(
-            status="success",
-            data=WebhookInfo(
-                db_id=db_id,
-                webhook_id=webhook_info.get("webhook_id", ""),
-                webhook_status=webhook_info.get("webhook_status", "inactive")
-            ),
-            message="웹훅 정보를 성공적으로 조회했습니다."
-        )
-    except WebhookError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.put("/{db_id}", response_model=WebhookResponse)
-async def update_webhook(db_id: str, webhook_update: WebhookUpdate):
-    """웹훅 상태 업데이트"""
-    try:
-        webhook_info = await webhook_service.update_webhook_status(db_id, webhook_update.webhook_status)
-        return WebhookResponse(
-            status="success",
-            data=webhook_info,
-            message="웹훅 상태가 성공적으로 업데이트되었습니다."
-        )
-    except WebhookError as e:
+        notion = NotionService()
+        await notion.delete_webhook(webhook_id)
+        return {"message": "Webhook deleted successfully"}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/events")

@@ -6,7 +6,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.utils.logger import setup_logging
 from app.api.v1.api import api_router
-from app.api.v1.endpoints import databases, webhooks, learning
 from app.core.events import register_startup, register_shutdown
 
 # 로깅 설정
@@ -33,10 +32,7 @@ register_startup(app)
 register_shutdown(app)
 
 # API 라우터 등록
-app.include_router(api_router, prefix=settings.API_V1_STR)
-app.include_router(databases.router, prefix="/databases", tags=["databases"])
-app.include_router(webhooks.router, prefix="/webhooks", tags=["webhooks"])
-app.include_router(learning.router, prefix="/learning", tags=["learning"])
+app.include_router(api_router)
 
 @app.get("/")
 async def root():

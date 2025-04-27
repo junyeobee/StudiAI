@@ -522,3 +522,14 @@ async def deactivate_database(db_id: str, end_status: bool = False) -> bool:
     except Exception as e:
         api_logger.error(f"Error deactivating database: {str(e)}")
         return False
+
+async def update_learning_database(db_id: str, update_data: dict) -> dict:
+    """학습 데이터베이스 정보 업데이트"""
+    try:
+        await init_supabase()
+        update_data["updated_at"] = datetime.now().isoformat()
+        res = await supabase.table("learning_databases").update(update_data).eq("db_id", db_id).execute()
+        return res.data[0] if res.data else None
+    except Exception as e:
+        api_logger.error(f"데이터베이스 업데이트 실패: {str(e)}")
+        return None

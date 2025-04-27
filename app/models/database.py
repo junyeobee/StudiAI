@@ -33,9 +33,17 @@ class DatabaseCreate(BaseModel):
 
 class DatabaseUpdate(BaseModel):
     """데이터베이스 업데이트 요청"""
-    title: Optional[str] = Field(None, description="데이터베이스 제목")
-    status: Optional[DatabaseStatus] = Field(None, description="데이터베이스 상태")
-    webhook_status: Optional[str] = Field(None, description="웹훅 상태")
+    db_id: Optional[str] = None
+    title: Optional[str] = None
+    parent_page_id: Optional[str] = None
+    status: Optional[DatabaseStatus] = None
+    webhook_id: Optional[str] = None
+    webhook_status: Optional[WebhookStatus] = None
+    last_used_date: Optional[datetime] = None
+
+    def dict(self, **kwargs):
+        # None이 아닌 값만 포함
+        return {k: v for k, v in super().dict(**kwargs).items() if v is not None}
 
 class DatabaseResponse(BaseModel):
     """데이터베이스 응답"""

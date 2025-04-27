@@ -28,68 +28,48 @@ class SummaryRequest(BaseModel):
     page_id: str
     summary: str
 
-@router.post("/plans", response_model=LearningPlanResponse)
-async def create_learning_plan(db_id: str, plan: LearningPlanCreate):
+@router.get("/plans", response_model=List[LearningPlan])
+async def get_learning_plans():
+    """학습 계획 목록 조회"""
+    try:
+        plans = await notion_service.get_learning_plans()
+        return plans
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/plans/{plan_id}", response_model=LearningPlan)
+async def get_learning_plan(plan_id: str):
+    """특정 학습 계획 조회"""
+    try:
+        plan = await notion_service.get_learning_plan(plan_id)
+        return plan
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Learning plan not found: {str(e)}")
+
+@router.post("/plans", response_model=LearningPlan)
+async def create_learning_plan(plan: LearningPlanCreate):
     """새로운 학습 계획 생성"""
     try:
-        learning_plan = await learning_service.create_learning_plan(db_id, plan)
-        return LearningPlanResponse(
-            status="success",
-            data=learning_plan,
-            message="학습 계획이 성공적으로 생성되었습니다."
-        )
-    except DatabaseError as e:
+        new_plan = await notion_service.create_learning_plan(plan)
+        return new_plan
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/plans/{page_id}", response_model=LearningPlanResponse)
-async def update_learning_plan(page_id: str, plan: LearningPlanUpdate):
-    """학습 계획 업데이트"""
+@router.put("/plans/{plan_id}", response_model=LearningPlan)
+async def update_learning_plan(plan_id: str, plan: LearningPlanUpdate):
+    """학습 계획 수정"""
     try:
-        # 현재 학습 계획 조회
-        current_plan = await learning_service.get_learning_plan(page_id)
-        if not current_plan:
-            raise HTTPException(status_code=404, detail="학습 계획을 찾을 수 없습니다.")
-        
-        # 업데이트할 필드만 선택
-        update_data = plan.model_dump(exclude_unset=True)
-        
-        # 학습 계획 업데이트
-        updated_plan = LearningPlan(
-            **current_plan.model_dump(),
-            **update_data
-        )
-        
-        learning_plan = await learning_service.update_learning_plan(page_id, updated_plan)
-        return LearningPlanResponse(
-            status="success",
-            data=learning_plan,
-            message="학습 계획이 성공적으로 업데이트되었습니다."
-        )
-    except DatabaseError as e:
+        updated_plan = await notion_service.update_learning_plan(plan_id, plan)
+        return updated_plan
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/plans/{page_id}", response_model=LearningPlanResponse)
-async def get_learning_plan(page_id: str):
-    """학습 계획 조회"""
+@router.delete("/plans/{plan_id}")
+async def delete_learning_plan(plan_id: str):
+    """학습 계획 삭제"""
     try:
-        learning_plan = await learning_service.get_learning_plan(page_id)
-        if not learning_plan:
-            raise HTTPException(status_code=404, detail="학습 계획을 찾을 수 없습니다.")
-        
-        return LearningPlanResponse(
-            status="success",
-            data=learning_plan,
-            message="학습 계획을 성공적으로 조회했습니다."
-        )
-    except DatabaseError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/plans")
-async def list_learning_plans(db_id: str):
-    """데이터베이스의 모든 학습 계획 조회"""
-    try:
-        plans = await learning_service.get_learning_plans(db_id)
-        return {"status": "success", "data": plans}
+        await notion_service.delete_learning_plan(plan_id)
+        return {"message": "Learning plan deleted successfully"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

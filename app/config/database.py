@@ -2,7 +2,7 @@
 Database configuration and connection setup
 """
 from supabase import create_client, Client
-from app.config.settings import settings
+from app.core.config import settings
 
 def get_supabase_client() -> Client:
     """

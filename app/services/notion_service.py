@@ -4,12 +4,16 @@ Notion API 연동 서비스
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import httpx
-from app.config.settings import settings
+from app.core.config import settings
 from app.core.exceptions import NotionAPIError
 from app.utils.logger import notion_logger
-from app.models.database import DatabaseInfo, DatabaseStatus, DatabaseMetadata
+from app.models.database import (
+    DatabaseInfo, 
+    DatabaseStatus,
+    DatabaseUpdate,
+    DatabaseMetadata
+)
 from app.models.learning import LearningPlan, LearningStatus
-from app.services.supa import get_db_info_by_id, get_active_learning_database
 from app.utils.retry import async_retry
 
 class NotionService:
@@ -65,17 +69,14 @@ class NotionService:
         """데이터베이스 정보 조회"""
         response = await self._make_request("GET", f"databases/{database_id}")
         
-        # Supabase에서 데이터베이스 상태 조회
-        db_info = get_db_info_by_id(database_id)
-        
         return DatabaseInfo(
             db_id=response["id"],
             title=response["title"][0]["text"]["content"],
             parent_page_id=response["parent"]["page_id"],
-            status=db_info.get("status", DatabaseStatus.READY) if db_info else DatabaseStatus.READY,
-            last_used_date=db_info.get("last_used_date", datetime.now()) if db_info else datetime.now(),
-            webhook_id=db_info.get("webhook_id") if db_info else None,
-            webhook_status=db_info.get("webhook_status", "inactive") if db_info else "inactive"
+            status=DatabaseStatus.READY,
+            last_used_date=datetime.now(),
+            webhook_id=None,
+            webhook_status="inactive"
         )
 
     async def create_learning_page(self, database_id: str, plan: LearningPlan) -> str:
@@ -168,7 +169,48 @@ class NotionService:
             notion_logger.error(f"데이터베이스 목록 조회 실패: {str(e)}")
             raise NotionAPIError(f"데이터베이스 목록 조회 실패: {str(e)}") 
         
-    async def get_active_database(self) -> DatabaseInfo:
+    async def get_active_database(self, db_info: dict) -> DatabaseInfo:
         """활성화된 데이터베이스 조회"""
-        db_info = get_active_learning_database()
-        return db_info
+        if not db_info:
+            return None
+            
+        # Notion API에서 데이터베이스 정보 조회
+        response = await self._make_request("GET", f"databases/{db_info['db_id']}")
+        
+        return DatabaseInfo(
+            db_id=db_info["db_id"],
+            title=response["title"][0]["text"]["content"],
+            parent_page_id=response["parent"]["page_id"],
+            status=db_info["status"],
+            last_used_date=db_info.get("last_used_date", datetime.now()),
+            webhook_id=db_info.get("webhook_id"),
+            webhook_status=db_info.get("webhook_status", "inactive")
+        )
+
+    async def update_database(self, database_id: str, db_update: DatabaseUpdate) -> DatabaseInfo:
+        """데이터베이스 정보 업데이트 (Notion API만)"""
+        try:
+            # Notion API에서 데이터베이스 정보 조회
+            response = await self._make_request("GET", f"databases/{database_id}")
+            
+            # 제목 업데이트
+            if db_update.title:
+                await self._make_request(
+                    "PATCH", 
+                    f"databases/{database_id}",
+                    json={"title": [{"text": {"content": db_update.title}}]}
+                )
+            
+            return DatabaseInfo(
+                db_id=response["id"],
+                title=db_update.title or response["title"][0]["text"]["content"],
+                parent_page_id=response["parent"]["page_id"],
+                status=db_update.status or DatabaseStatus.READY,
+                last_used_date=datetime.now(),
+                webhook_id=None,
+                webhook_status=db_update.webhook_status or "inactive"
+            )
+            
+        except Exception as e:
+            notion_logger.error(f"데이터베이스 업데이트 실패: {str(e)}")
+            raise NotionAPIError(f"데이터베이스 업데이트 실패: {str(e)}")
