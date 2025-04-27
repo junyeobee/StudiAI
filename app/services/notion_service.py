@@ -9,7 +9,8 @@ from app.core.exceptions import NotionAPIError
 from app.utils.logger import notion_logger
 from app.models.database import DatabaseInfo, DatabaseStatus, DatabaseMetadata
 from app.models.learning import LearningPlan, LearningStatus
-from supa import get_db_info_by_id, get_active_learning_database
+from app.services.supa import get_db_info_by_id, get_active_learning_database
+from app.utils.retry import async_retry
 
 class NotionService:
     def __init__(self):
@@ -22,6 +23,7 @@ class NotionService:
             "Content-Type": "application/json"
         }
 
+    @async_retry(max_retries=3, delay=1.0, backoff=2.0)
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Notion API 요청을 보내는 공통 메서드"""
         url = f"{self.base_url}/{endpoint}"
@@ -50,8 +52,6 @@ class NotionService:
                 "복습 여부": {"checkbox": {}}
             }
         }
-        await self._make_request("POST", "databases", json=data)
-        
         response = await self._make_request("POST", "databases", json=data)
         return DatabaseInfo(
             db_id=response["id"],

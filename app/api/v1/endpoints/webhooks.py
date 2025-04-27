@@ -14,7 +14,7 @@ from app.models.webhook import (
 from app.core.exceptions import WebhookError
 from app.utils.logger import webhook_logger
 from pydantic import BaseModel
-from supa import (
+from app.services.supa import (
     update_webhook_info,
     get_webhook_info_by_db_id,
     verify_all_webhooks,
@@ -67,13 +67,21 @@ async def delete_webhook(db_id: str):
 async def get_webhook(db_id: str):
     """웹훅 정보 조회"""
     try:
-        webhook_info = webhook_service.get_webhook_info(db_id)
+        webhook_info = await webhook_service.get_webhook_info(db_id)
         if not webhook_info:
-            raise HTTPException(status_code=404, detail="웹훅을 찾을 수 없습니다.")
+            return WebhookResponse(
+                status="success",
+                data=WebhookInfo(db_id=db_id),
+                message="웹훅 정보를 찾을 수 없습니다."
+            )
         
         return WebhookResponse(
             status="success",
-            data=webhook_info,
+            data=WebhookInfo(
+                db_id=db_id,
+                webhook_id=webhook_info.get("webhook_id", ""),
+                webhook_status=webhook_info.get("webhook_status", "inactive")
+            ),
             message="웹훅 정보를 성공적으로 조회했습니다."
         )
     except WebhookError as e:
@@ -83,7 +91,7 @@ async def get_webhook(db_id: str):
 async def update_webhook(db_id: str, webhook_update: WebhookUpdate):
     """웹훅 상태 업데이트"""
     try:
-        webhook_info = webhook_service.update_webhook_status(db_id, webhook_update.webhook_status)
+        webhook_info = await webhook_service.update_webhook_status(db_id, webhook_update.webhook_status)
         return WebhookResponse(
             status="success",
             data=webhook_info,
@@ -128,20 +136,6 @@ def update_webhook(req: WebhookInfo):
         "db_id": req.db_id,
         "webhook_id": req.webhook_id
     }
-
-@router.get("/{db_id}", response_model=WebhookInfo)
-def get_webhook(db_id: str):
-    """특정 DB ID에 대한 웹훅 정보를 반환"""
-    webhook_info = get_webhook_info_by_db_id(db_id)
-    
-    if not webhook_info:
-        return WebhookInfo(db_id=db_id)
-    
-    return WebhookInfo(
-        db_id=db_id,
-        webhook_id=webhook_info.get("webhook_id", ""),
-        webhook_status=webhook_info.get("webhook_status", "inactive")
-    )
 
 @router.post("/verify")
 async def verify_webhooks(background_tasks: BackgroundTasks):

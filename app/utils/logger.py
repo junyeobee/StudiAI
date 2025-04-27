@@ -23,21 +23,21 @@ date_format = "%Y-%m-%d %H:%M:%S"
 # API 로거 설정
 api_logger = logging.getLogger("api")
 api_logger.setLevel(logging.INFO)
-api_handler = logging.FileHandler(log_file)
+api_handler = logging.FileHandler(log_file, encoding='utf-8')
 api_handler.setFormatter(logging.Formatter(log_format, date_format))
 api_logger.addHandler(api_handler)
 
 # 웹훅 로거 설정
 webhook_logger = logging.getLogger("webhook")
 webhook_logger.setLevel(logging.INFO)
-webhook_handler = logging.FileHandler(log_file)
+webhook_handler = logging.FileHandler(log_file, encoding='utf-8')
 webhook_handler.setFormatter(logging.Formatter(log_format, date_format))
 webhook_logger.addHandler(webhook_handler)
 
 # Notion 로거 설정
 notion_logger = logging.getLogger("notion")
 notion_logger.setLevel(logging.INFO)
-notion_handler = logging.FileHandler(log_file)
+notion_handler = logging.FileHandler(log_file, encoding='utf-8')
 notion_handler.setFormatter(logging.Formatter(log_format, date_format))
 notion_logger.addHandler(notion_handler)
 

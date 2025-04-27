@@ -46,16 +46,16 @@ async def update_learning_plan(page_id: str, plan: LearningPlanUpdate):
     """학습 계획 업데이트"""
     try:
         # 현재 학습 계획 조회
-        current_plan = learning_service.get_learning_plan(page_id)
+        current_plan = await learning_service.get_learning_plan(page_id)
         if not current_plan:
             raise HTTPException(status_code=404, detail="학습 계획을 찾을 수 없습니다.")
         
         # 업데이트할 필드만 선택
-        update_data = plan.dict(exclude_unset=True)
+        update_data = plan.model_dump(exclude_unset=True)
         
         # 학습 계획 업데이트
         updated_plan = LearningPlan(
-            **current_plan.dict(),
+            **current_plan.model_dump(),
             **update_data
         )
         
@@ -72,7 +72,7 @@ async def update_learning_plan(page_id: str, plan: LearningPlanUpdate):
 async def get_learning_plan(page_id: str):
     """학습 계획 조회"""
     try:
-        learning_plan = learning_service.get_learning_plan(page_id)
+        learning_plan = await learning_service.get_learning_plan(page_id)
         if not learning_plan:
             raise HTTPException(status_code=404, detail="학습 계획을 찾을 수 없습니다.")
         
@@ -84,12 +84,13 @@ async def get_learning_plan(page_id: str):
     except DatabaseError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/plans", response_model=List[LearningPlan])
+@router.get("/plans")
 async def list_learning_plans(db_id: str):
     """데이터베이스의 모든 학습 계획 조회"""
     try:
-        return learning_service.get_learning_plans(db_id)
-    except DatabaseError as e:
+        plans = await learning_service.get_learning_plans(db_id)
+        return {"status": "success", "data": plans}
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/pages/create")

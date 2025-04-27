@@ -14,7 +14,7 @@ from app.models.database import (
 )
 from app.core.exceptions import NotionAPIError, DatabaseError
 from app.utils.logger import api_logger
-from supa import (
+from app.services.supa import (
     list_all_learning_databases,
     update_learning_database_status,
     get_active_learning_database,
@@ -79,8 +79,7 @@ async def update_database(db_id: str, db_update: DatabaseUpdate):
 async def list_databases():
     """모든 학습 데이터베이스 목록 조회"""
     try:
-        databases = list_all_learning_databases()
-        print(databases)
+        databases = await list_all_learning_databases()
         return databases
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -114,7 +113,7 @@ async def deactivate_database(db_id: str):
 async def get_active_database():
     """현재 활성화된 데이터베이스 조회"""
     try:
-        active_db = get_active_learning_database()
+        active_db = await get_active_learning_database()
         if not active_db:
             return {"status": "none", "message": "활성화된 데이터베이스가 없습니다."}
         return {"status": "success", "data": active_db}
@@ -126,8 +125,8 @@ async def get_active_database():
 async def get_available_databases():
     """학습 가능한 데이터베이스 목록 조회"""
     try:
-        databases = get_available_learning_databases()
-        return {"status": "success", "data": databases}
+        available_dbs = await list_all_learning_databases()
+        return {"status": "success", "data": available_dbs}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
