@@ -13,7 +13,10 @@ from app.models.database import (
     DatabaseUpdate,
     DatabaseMetadata
 )
-from app.models.learning import LearningPlan, LearningStatus
+from app.models.learning import (
+    LearningPageCreate,
+    LearningPlan
+)
 from app.utils.retry import async_retry
 
 class NotionService:
@@ -40,6 +43,7 @@ class NotionService:
             notion_logger.error(f"Notion API 요청 실패: {str(e)}")
             raise NotionAPIError(f"API 요청 실패: {str(e)}")
 
+    # 데이터베이스 생성
     async def create_database(self, title: str) -> str:
         """새로운 데이터베이스 생성"""
         data = {
@@ -64,7 +68,8 @@ class NotionService:
             status=DatabaseStatus.READY,
             last_used_date=datetime.now()
         )
-
+    
+    # 데이터베이스 정보 조회
     async def get_database(self, database_id: str) -> DatabaseInfo:
         """데이터베이스 정보 조회"""
         response = await self._make_request("GET", f"databases/{database_id}")
@@ -79,34 +84,7 @@ class NotionService:
             webhook_status="inactive"
         )
 
-    async def create_learning_page(self, database_id: str, plan: LearningPlan) -> str:
-        """학습 계획 페이지 생성"""
-        data = {
-            "parent": {"database_id": database_id},
-            "properties": {
-                "Title": {
-                    "title": [{"text": {"content": plan.title}}]
-                },
-                "Status": {
-                    "select": {"name": plan.status.value}
-                },
-                "Priority": {
-                    "number": plan.priority
-                },
-                "Tags": {
-                    "multi_select": [{"name": tag} for tag in plan.tags]
-                }
-            }
-        }
-        
-        if plan.start_date:
-            data["properties"]["Start Date"] = {"date": {"start": plan.start_date.isoformat()}}
-        if plan.end_date:
-            data["properties"]["End Date"] = {"date": {"start": plan.end_date.isoformat()}}
-        
-        response = await self._make_request("POST", "pages", json=data)
-        return response["id"]
-
+    # 학습 계획 페이지 업데이트
     async def update_learning_page(self, page_id: str, plan: LearningPlan) -> None:
         """학습 계획 페이지 업데이트"""
         data = {
@@ -133,10 +111,12 @@ class NotionService:
         
         await self._make_request("PATCH", f"pages/{page_id}", json=data)
 
+    # 페이지 내용 조회
     async def get_page_content(self, page_id: str) -> Dict[str, Any]:
         """페이지 내용 조회"""
         return await self._make_request("GET", f"blocks/{page_id}/children")
 
+    # 페이지에 새로운 블록 추가
     async def append_block(self, page_id: str, block_type: str, content: str) -> None:
         """페이지에 새로운 블록 추가"""
         data = {
@@ -150,6 +130,7 @@ class NotionService:
         }
         await self._make_request("PATCH", f"blocks/{page_id}/children", json=data)
 
+    # 페이지에 연결된 데이터베이스 목록 조회
     async def list_databases_in_page(self, page_id: str) -> List[DatabaseMetadata]:
         """페이지에 연결된 데이터베이스 목록 조회"""
         try:
@@ -169,6 +150,7 @@ class NotionService:
             notion_logger.error(f"데이터베이스 목록 조회 실패: {str(e)}")
             raise NotionAPIError(f"데이터베이스 목록 조회 실패: {str(e)}") 
         
+    # 활성화된 데이터베이스 조회
     async def get_active_database(self, db_info: dict) -> DatabaseInfo:
         """활성화된 데이터베이스 조회"""
         if not db_info:
@@ -187,6 +169,7 @@ class NotionService:
             webhook_status=db_info.get("webhook_status", "inactive")
         )
 
+    # 데이터베이스 정보 업데이트 (Notion API만)
     async def update_database(self, database_id: str, db_update: DatabaseUpdate) -> DatabaseInfo:
         """데이터베이스 정보 업데이트 (Notion API만)"""
         try:
@@ -214,3 +197,31 @@ class NotionService:
         except Exception as e:
             notion_logger.error(f"데이터베이스 업데이트 실패: {str(e)}")
             raise NotionAPIError(f"데이터베이스 업데이트 실패: {str(e)}")
+        
+
+    async def create_learning_page(self, database_id: str, plan: LearningPageCreate) -> str:
+        """Notion에 단일 학습 페이지 생성"""
+        props = {
+            "학습 제목": {
+                "title": [{"text": {"content": plan.title}}]
+            },
+            "날짜": {
+                "date": {"start": plan.date.isoformat()}
+            },
+            "진행 상태": {
+                "select": {"name": plan.status.value}
+            },
+            "복습 여부": {
+                "checkbox": plan.revisit
+            }
+        }
+
+        resp = await self._make_request(
+            "POST",
+            "pages",
+            json={
+                "parent": {"database_id": database_id},
+                "properties": props
+            }
+        )
+        return resp["id"]

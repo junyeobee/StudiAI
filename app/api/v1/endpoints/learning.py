@@ -11,7 +11,11 @@ from app.models.learning import (
     LearningPlanCreate,
     LearningPlanUpdate,
     LearningPlanResponse,
-    LearningSummary
+    LearningSummary,
+    LearningPagesRequest
+)
+from app.services.supa import (
+    insert_learning_page
 )
 from app.core.exceptions import DatabaseError
 from app.utils.logger import api_logger
@@ -28,7 +32,7 @@ class SummaryRequest(BaseModel):
     page_id: str
     summary: str
 
-@router.get("/plans", response_model=List[LearningPlan])
+@router.get("/pages", response_model=List[LearningPlan])
 async def get_learning_plans():
     """학습 계획 목록 조회"""
     try:
@@ -36,6 +40,56 @@ async def get_learning_plans():
         return plans
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/pages/create")
+async def create_pages(req: LearningPagesRequest):
+    """
+    여러 학습 페이지를 Notion에 생성하고,
+    Supabase에 메타를 저장합니다.
+    """
+    results = []
+    # 1) 현재 활성 DB는 notion_service.get_active_database() 등으로 가져와도 되고,
+    #    req.learning_db_id가 이미 Supabase PK라면 그대로 사용하세요.
+    notion_db_id = req.notion_db_id
+    learning_db_id = str(req.notion_db_id)
+
+    for plan in req.plans:
+        try:
+            # 2) Notion에 페이지 생성
+            page_id = await notion_service.create_learning_page(notion_db_id, plan)
+
+            # 3) AI 요약 블록 빈 문단 추가
+            resp = await notion_service._make_request(
+                "PATCH",
+                f"blocks/{page_id}/children",
+                json={
+                    "children": [{
+                        "object": "block",
+                        "type": "paragraph",
+                        "paragraph": {"rich_text":[{"text":{"content":""}}]}
+                    }]
+                }
+            )
+            ai_block_id = resp["results"][0]["id"]
+
+            # 4) Supabase에 메타 저장 (priority/tags 없이)
+            saved = await insert_learning_page(
+                date=plan.date.isoformat(),
+                title=plan.title,
+                page_id=page_id,
+                ai_block_id=ai_block_id,
+                learning_db_id=learning_db_id
+            )
+
+            results.append({"page_id": page_id, "saved": saved})
+        except Exception as e:
+            results.append({"error": str(e), "plan": plan.dict()})
+
+    return {
+        "status": "completed",
+        "total": len(req.plans),
+        "results": results
+    }
 
 @router.get("/plans/{plan_id}", response_model=LearningPlan)
 async def get_learning_plan(plan_id: str):
@@ -55,34 +109,6 @@ async def create_learning_plan(plan: LearningPlanCreate):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.put("/plans/{plan_id}", response_model=LearningPlan)
-async def update_learning_plan(plan_id: str, plan: LearningPlanUpdate):
-    """학습 계획 수정"""
-    try:
-        updated_plan = await notion_service.update_learning_plan(plan_id, plan)
-        return updated_plan
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.delete("/plans/{plan_id}")
-async def delete_learning_plan(plan_id: str):
-    """학습 계획 삭제"""
-    try:
-        await notion_service.delete_learning_plan(plan_id)
-        return {"message": "Learning plan deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/pages/create")
-def create_page(req: PageRequest):
-    """학습 계획 페이지 생성"""
-    notion_db_id, learning_db_id = notion_service.get_learning_database_by_title(req.db_title)
-    if not notion_db_id or not learning_db_id:
-        return { "error": "해당 제목의 DB를 찾을 수 없습니다." }
-
-    notion_service.create_learning_pages(req.plans, notion_db_id, learning_db_id)
-    return { "status": "created", "count": len(req.plans) }
-
 @router.post("/pages/summary")
 def fill_summary(req: SummaryRequest):
     """요약 블록 내용 업데이트"""
@@ -93,7 +119,7 @@ def fill_summary(req: SummaryRequest):
     notion_service.update_ai_summary_block(ai_block_id, req.summary)
     return { "status": "updated" }
 
-@router.post("/summaries", response_model=LearningSummary)
+@router.post("/pages/summary", response_model=LearningSummary)
 async def create_learning_summary(page_id: str, summary: str):
     """학습 요약 생성"""
     try:
@@ -101,7 +127,7 @@ async def create_learning_summary(page_id: str, summary: str):
     except DatabaseError as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/summaries/{page_id}", response_model=LearningSummary)
+@router.get("/page/summary/{page_id}", response_model=LearningSummary)
 async def get_learning_summary(page_id: str):
     """학습 요약 조회"""
     try:
@@ -111,3 +137,21 @@ async def get_learning_summary(page_id: str):
         return summary
     except DatabaseError as e:
         raise HTTPException(status_code=500, detail=str(e)) 
+
+@router.delete("/plans/{plan_id}")
+async def delete_learning_plan(plan_id: str):
+    """학습 계획 삭제"""
+    try:
+        await notion_service.delete_learning_plan(plan_id)
+        return {"message": "Learning plan deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.put("/pages/{plan_id}", response_model=LearningPlan)
+async def update_learning_plan(plan_id: str, plan: LearningPlanUpdate):
+    """학습 계획 수정"""
+    try:
+        updated_plan = await notion_service.update_learning_plan(plan_id, plan)
+        return updated_plan
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

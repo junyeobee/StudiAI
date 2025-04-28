@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("studyai")
 
 # StudyAI API 서버 주소
-STUDYAI_API = "https://href-declared-pregnancy-tracks.trycloudflare.com"
+STUDYAI_API = "https://bush-newer-workflow-criterion.trycloudflare.com"
 
 WEBHOOK_CREATE_URL = "https://hook.eu2.make.com/39qh7m7j3ghar2r52i6w8aygn5n1526c"  # 웹훅 생성 시나리오 URL
 WEBHOOK_DELETE_URL = "https://hook.eu1.make.com/hijklmn67890"  # 웹훅 삭제 시나리오 URL
@@ -69,7 +69,7 @@ async def get_current_learning_database() -> str:
             if data.get("status") == "none":
                 return "현재 사용 중인 학습 데이터베이스가 없습니다. 새로운 데이터베이스를 생성하거나 기존 데이터베이스를 활성화해주세요."
             
-            db = data.get("database", {})
+            db = data.get("data", {})
             return f"""
                 현재 사용 중인 학습 데이터베이스 정보:
                 - 제목: {db.get('title')}
@@ -106,7 +106,7 @@ async def list_databases_in_parent_page(parent_page_id: str) -> str:
     Args:
         parent_page_id: 부모 페이지의 Notion ID
     """
-    url = f"{STUDYAI_API}/databases/parent/{parent_page_id}"
+    url = f"{STUDYAI_API}/databases/pages/{parent_page_id}/databases"
     
     async with httpx.AsyncClient() as client:
         try:
@@ -114,7 +114,7 @@ async def list_databases_in_parent_page(parent_page_id: str) -> str:
             response.raise_for_status()
             data = response.json()
             
-            dbs = data.get("databases", [])
+            dbs = data
             if not dbs:
                 return "해당 페이지에서 데이터베이스를 찾을 수 없습니다."
             
@@ -294,6 +294,16 @@ async def create_learning_database(title: str) -> str:
             return f"성공적으로 학습 데이터베이스가 생성되었습니다: {title}"
         except Exception as e:
             return f"데이터베이스 생성 중 오류 발생: {str(e)}"
+
+# TODO: 30-75분 작업 - GitHub Webhook 엔드포인트 구현
+# 1. FastAPI 라우터 추가
+# 2. 시그니처 검증 코드 구현
+# 3. payload 처리 로직 작성
+
+# TODO: 75-120분 작업 - 통합 테스트 및 문서화
+# 1. pytest-asyncio로 create_learning_database 테스트
+# 2. /github_webhook 엔드포인트 테스트
+# 3. 더미 push 이벤트로 200 응답 확인
 
 # 서버 실행
 if __name__ == "__main__":
