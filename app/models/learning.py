@@ -61,6 +61,9 @@ class LearningPageCreate(BaseModel):
     date:  datetime = Field(..., description="학습 날짜")
     status: LearningStatus = Field(LearningStatus.START_PRE, description="진행 상태")
     revisit: bool = Field(False, alias="복습 여부", description="복습 여부 (checkbox)")
+    goal_intro: str = Field("이 섹션에 학습의 목적이나 계획을 간단히 작성하세요." ,description="학습 목표 섹션 상단에 들어갈 인용문")
+    goals: List[str] = Field(..., description="학습 목표")
+    summary: str = Field(..., description="학습 요약")
 
 class LearningPagesRequest(BaseModel):
     """여러 학습 페이지 일괄 생성 요청"""

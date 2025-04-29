@@ -140,6 +140,17 @@ async def get_db_info_by_id(db_id: str) -> dict:
         api_logger.error(f"데이터베이스 정보 조회 실패: {str(e)}")
         return None
 
+# 현재 사용중인 Notion DB ID 조회
+async def get_used_notion_db_id() -> str | None:
+    """현재 사용중인 Notion DB ID 조회"""
+    await init_supabase()
+    res = await supabase.table("learning_databases") \
+        .select("db_id") \
+        .eq("status", "used") \
+        .single() \
+        .execute()
+    return res.data["db_id"] if res.data else None
+
 async def update_webhook_info(db_id: str, webhook_id: str, status: str = "active") -> dict:
     """웹훅 정보 업데이트"""
     try:

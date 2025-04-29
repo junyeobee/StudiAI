@@ -6,33 +6,46 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("studyai")
 
 # StudyAI API 서버 주소
-STUDYAI_API = "https://bush-newer-workflow-criterion.trycloudflare.com"
+STUDYAI_API = "https://bond-sail-prohibited-replied.trycloudflare.com"
 
 WEBHOOK_CREATE_URL = "https://hook.eu2.make.com/39qh7m7j3ghar2r52i6w8aygn5n1526c"  # 웹훅 생성 시나리오 URL
 WEBHOOK_DELETE_URL = "https://hook.eu1.make.com/hijklmn67890"  # 웹훅 삭제 시나리오 URL
 
 @mcp.tool()
-async def create_learning_plan(db_title: str, plans: List[Dict[str, Any]]) -> str:
-    """학습 계획 페이지를 생성합니다.
+async def create_learning_pages(notion_db_id: str, plans: List[Dict[str, Any]]) -> str:
+    """
+    학습 DB(row) 안에 여러 학습 페이지를 한 번에 생성합니다. Args 예시는 다음과 같습니다. 형식에 맞게 작성해주세요.
     
     Args:
-        db_title: 학습 데이터베이스 제목 (예: "React 학습 계획")
-        plans: 생성할 학습 계획 목록 (각 계획은 title, goal_items, summary를 포함)
+        notion_db_id: Notion 데이터베이스 ID (현재 선택된 학습 DB의 ID)
+        plans: 학습 페이지 목록
+            └─ 각 항목 예시는 다음과 같습니다. 사용자의 학습 목표 요구에 맞게 작성해주세요.
+               {
+                 "title": "컴포넌트 기본 개념",
+                 "date": "2025-04-29T09:00:00Z" 날짜 형식은 ISO 8601 형식으로 작성해주세요.
+                 "status": "시작 전", # ENUM 형식(시작 전, 진행중, 완료)
+                 "revisit": false, #복습 여부
+                 "goal": ["React 컴포넌트 개념 이해하기"],
+                 "summary": "JSX·props·state에 집중한다"
+                 "goal_intro": "컴포넌트의 기본 개념을 이해하고, 컴포넌트를 사용하는 방법 배우기"
+               }
+    Returns:
+        성공/실패 메시지 문자열
     """
     url = f"{STUDYAI_API}/learning/pages/create"
     payload = {
-        "db_title": db_title,
+        "notion_db_id": notion_db_id,
         "plans": plans
     }
-    
+
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(url, json=payload, timeout=30.0)
             response.raise_for_status()
-            data = response.json()
-            return f"성공적으로 학습 계획이 생성되었습니다."
+            created = response.json().get("total", 0)
+            return f"학습 페이지 {created}개를 성공적으로 했습니다!"
         except Exception as e:
-            return f"학습 계획 생성 중 오류 발생: {str(e)}"
+            return f"학습 페이지 생성 중 오류: {str(e)}"
 
 @mcp.tool()
 async def update_summary(page_id: str, summary: str) -> str:
@@ -79,6 +92,25 @@ async def get_current_learning_database() -> str:
         except Exception as e:
             return f"데이터베이스 조회 중 오류 발생: {str(e)}"
         
+@mcp.tool()
+async def list_learning_pages() -> str:
+    """현재 학습 중인('used') 중인 db의 페이지 목록을 조회합니다."""
+    url = f"{STUDYAI_API}/learning/pages/currentUsedDB"
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            data = response.json()
+            pages = data.get("pages", [])
+            if not pages:
+                return "현재 학습 중인 db에 페이지가 없습니다."
+            
+            page_list = "\n".join([f"- {page.get('title')} (ID: {page.get('page_id')})" for page in pages])
+            return f"현재 학습 중인 db의 페이지 목록:\n{page_list}"
+        except Exception as e:
+            return f"페이지 목록 조회 중 오류 발생: {str(e)}"
+
 @mcp.tool()
 async def list_learning_databases() -> str:
     """사용 가능한 학습 데이터베이스 목록을 조회합니다."""

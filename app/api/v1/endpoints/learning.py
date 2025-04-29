@@ -15,7 +15,9 @@ from app.models.learning import (
     LearningPagesRequest
 )
 from app.services.supa import (
-    insert_learning_page
+    insert_learning_page,
+    get_used_notion_db_id
+    
 )
 from app.core.exceptions import DatabaseError
 from app.utils.logger import api_logger
@@ -41,49 +43,41 @@ async def get_learning_plans():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+#현재 학습 중인 db 조회
+@router.get("/pages/currentUsedDB")
+async def list_all_learning_pages():
+    """현재 학습 중인 db 조회"""
+    try:
+        db_id = await get_used_notion_db_id()
+        if not db_id:
+            raise HTTPException(404, "활성화된 학습 DB가 없습니다.")
+        pages = await notion_service.list_all_pages(db_id)
+        return {"db_id": db_id, "total": len(pages), "pages": pages}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 @router.post("/pages/create")
 async def create_pages(req: LearningPagesRequest):
-    """
-    여러 학습 페이지를 Notion에 생성하고,
-    Supabase에 메타를 저장합니다.
-    """
-    results = []
-    # 1) 현재 활성 DB는 notion_service.get_active_database() 등으로 가져와도 되고,
-    #    req.learning_db_id가 이미 Supabase PK라면 그대로 사용하세요.
     notion_db_id = req.notion_db_id
-    learning_db_id = str(req.notion_db_id)
+    results = []
 
     for plan in req.plans:
         try:
-            # 2) Notion에 페이지 생성
-            page_id = await notion_service.create_learning_page(notion_db_id, plan)
+            # 새로운 학습 행 생성
+            page_id, ai_block_id = await notion_service.create_learning_page(notion_db_id, plan)
 
-            # 3) AI 요약 블록 빈 문단 추가
-            resp = await notion_service._make_request(
-                "PATCH",
-                f"blocks/{page_id}/children",
-                json={
-                    "children": [{
-                        "object": "block",
-                        "type": "paragraph",
-                        "paragraph": {"rich_text":[{"text":{"content":""}}]}
-                    }]
-                }
-            )
-            ai_block_id = resp["results"][0]["id"]
-
-            # 4) Supabase에 메타 저장 (priority/tags 없이)
+            # 생성된 학습 행에 대한 메타 저장
             saved = await insert_learning_page(
                 date=plan.date.isoformat(),
                 title=plan.title,
                 page_id=page_id,
                 ai_block_id=ai_block_id,
-                learning_db_id=learning_db_id
+                learning_db_id=notion_db_id
             )
 
-            results.append({"page_id": page_id, "saved": saved})
+            results.append({"page_id": page_id, "ai_block_id": ai_block_id, "saved": saved})
         except Exception as e:
-            results.append({"error": str(e), "plan": plan.dict()})
+            results.append({"error": str(e), "plan": plan.model_dump()})
 
     return {
         "status": "completed",
@@ -91,6 +85,7 @@ async def create_pages(req: LearningPagesRequest):
         "results": results
     }
 
+#####################미사용######################
 @router.get("/plans/{plan_id}", response_model=LearningPlan)
 async def get_learning_plan(plan_id: str):
     """특정 학습 계획 조회"""
@@ -155,3 +150,4 @@ async def update_learning_plan(plan_id: str, plan: LearningPlanUpdate):
         return updated_plan
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+###########################################

@@ -199,29 +199,115 @@ class NotionService:
             raise NotionAPIError(f"데이터베이스 업데이트 실패: {str(e)}")
         
 
-    async def create_learning_page(self, database_id: str, plan: LearningPageCreate) -> str:
-        """Notion에 단일 학습 페이지 생성"""
+    async def create_learning_page(self, database_id: str, plan: LearningPageCreate) -> tuple[str, str]:
+        """
+        • 페이지를 생성하고  
+        • 학습 목표 · AI 요약 블록을 자동으로 채운 뒤  
+        • (page_id, ai_block_id) 튜플을 반환
+        """
+        # 1) 페이지 skeleton 생성
         props = {
-            "학습 제목": {
-                "title": [{"text": {"content": plan.title}}]
-            },
-            "날짜": {
-                "date": {"start": plan.date.isoformat()}
-            },
-            "진행 상태": {
-                "select": {"name": plan.status.value}
-            },
-            "복습 여부": {
-                "checkbox": plan.revisit
-            }
+            "학습 제목": {"title": [{"text": {"content": plan.title}}]},
+            "날짜":     {"date":  {"start": plan.date.isoformat()}},
+            "진행 상태": {"select": {"name": plan.status.value}},
+            "복습 여부": {"checkbox": plan.revisit}
         }
-
-        resp = await self._make_request(
+        page_resp = await self._make_request(
             "POST",
             "pages",
-            json={
-                "parent": {"database_id": database_id},
-                "properties": props
-            }
+            json={"parent": {"database_id": database_id}, "properties": props}
         )
-        return resp["id"]
+        page_id = page_resp["id"]
+
+        # 2) 본문 블록 구성
+        blocks: List[dict] = [
+            # 학습 목표
+            {
+                "object":"block","type":"heading_2",
+                "heading_2":{"rich_text":[{"type":"text","text":{"content":"🧠 학습 목표"}}]}
+            },
+            {
+                "object":"block","type":"quote",
+                "quote":{"rich_text":[{"type":"text","text":{"content":plan.goal_intro}}]}
+            },
+        ]
+        for goal in plan.goals:
+            blocks.append({
+                "object": "block",
+                "type": "to_do",
+                "to_do": {
+                    "rich_text": [{"type": "text", "text": {"content": goal}}],
+                    "checked": False
+                }
+            })
+        blocks.append({"object":"block","type":"divider","divider":{}})
+
+        # 🤖 AI 요약
+        blocks.extend([
+            {
+                "object":"block","type":"heading_2",
+                "heading_2":{"rich_text":[{"type":"text","text":{"content":"🤖 AI 요약 내용"}}]}
+            },
+            {
+                "object":"block","type":"quote",
+                "quote":{"rich_text":[{"type":"text","text":{"content":"학습 요약 정리를 자동화하거나 수동으로 작성하는 공간입니다."}}]}
+            },
+            {
+                "object":"block","type":"code",
+                "code":{
+                    "rich_text":[{"type":"text","text":{"content":plan.summary}}],
+                    "language":"markdown"
+                }
+            }
+        ])
+
+        # 3) 한 번에 children append
+        append_resp = await self._make_request(
+            "PATCH",
+            f"blocks/{page_id}/children",
+            json={"children": blocks}
+        )
+        ai_block_id = append_resp["results"][-1]["id"]  # 마지막 code 블록 ID
+
+        return page_id, ai_block_id
+    
+
+    async def list_all_pages(self, database_id: str) -> List[Dict[str, Any]]:
+        """
+        주어진 Notion 데이터베이스의 모든 행(row) 페이지를 반환.
+        반환값 예시:
+        [
+          {
+            "page_id": "xxxxxxxx",
+            "title": "컴포넌트 기본",
+            "date":  "2025-04-30",
+            "status": "진행중",
+            "revisit": False
+          },
+          ...
+        ]
+        """
+        has_more = True
+        next_cursor = None
+        pages: List[Dict[str, Any]] = []
+
+        while has_more:
+            body = {"start_cursor": next_cursor} if next_cursor else {}
+            resp = await self._make_request(
+                "POST",
+                f"databases/{database_id}/query",
+                json=body
+            )
+            for row in resp["results"]:
+                props = row["properties"]
+                pages.append({
+                    "page_id": row["id"],
+                    "title": props["학습 제목"]["title"][0]["text"]["content"] if props["학습 제목"]["title"] else "(제목 없음)",
+                    "date":  props["날짜"]["date"]["start"] if props["날짜"]["date"] else None,
+                    "status": props["진행 상태"]["select"]["name"] if props["진행 상태"]["select"] else "(상태 없음)",
+                    "revisit": props["복습 여부"]["checkbox"] if props["복습 여부"]["checkbox"] else False
+                })
+            has_more = resp.get("has_more", False)
+            next_cursor = resp.get("next_cursor")
+            print(pages)
+        return pages
