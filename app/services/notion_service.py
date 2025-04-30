@@ -1,6 +1,7 @@
 """
 Notion API 연동 서비스
 """
+import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import httpx
@@ -15,7 +16,7 @@ from app.models.database import (
 )
 from app.models.learning import (
     LearningPageCreate,
-    LearningPlan
+    LearningPagesRequest
 )
 from app.utils.retry import async_retry
 
@@ -83,52 +84,6 @@ class NotionService:
             webhook_id=None,
             webhook_status="inactive"
         )
-
-    # 학습 계획 페이지 업데이트
-    async def update_learning_page(self, page_id: str, plan: LearningPlan) -> None:
-        """학습 계획 페이지 업데이트"""
-        data = {
-            "properties": {
-                "Title": {
-                    "title": [{"text": {"content": plan.title}}]
-                },
-                "Status": {
-                    "select": {"name": plan.status.value}
-                },
-                "Priority": {
-                    "number": plan.priority
-                },
-                "Tags": {
-                    "multi_select": [{"name": tag} for tag in plan.tags]
-                }
-            }
-        }
-        
-        if plan.start_date:
-            data["properties"]["Start Date"] = {"date": {"start": plan.start_date.isoformat()}}
-        if plan.end_date:
-            data["properties"]["End Date"] = {"date": {"start": plan.end_date.isoformat()}}
-        
-        await self._make_request("PATCH", f"pages/{page_id}", json=data)
-
-    # 페이지 내용 조회
-    async def get_page_content(self, page_id: str) -> Dict[str, Any]:
-        """페이지 내용 조회"""
-        return await self._make_request("GET", f"blocks/{page_id}/children")
-
-    # 페이지에 새로운 블록 추가
-    async def append_block(self, page_id: str, block_type: str, content: str) -> None:
-        """페이지에 새로운 블록 추가"""
-        data = {
-            "children": [{
-                "object": "block",
-                "type": block_type,
-                block_type: {
-                    "rich_text": [{"text": {"content": content}}]
-                }
-            }]
-        }
-        await self._make_request("PATCH", f"blocks/{page_id}/children", json=data)
 
     # 페이지에 연결된 데이터베이스 목록 조회
     async def list_databases_in_page(self, page_id: str) -> List[DatabaseMetadata]:
@@ -205,7 +160,7 @@ class NotionService:
         • 학습 목표 · AI 요약 블록을 자동으로 채운 뒤  
         • (page_id, ai_block_id) 튜플을 반환
         """
-        # 1) 페이지 skeleton 생성
+        # 1) 페이지 속성
         props = {
             "학습 제목": {"title": [{"text": {"content": plan.title}}]},
             "날짜":     {"date":  {"start": plan.date.isoformat()}},
@@ -219,7 +174,7 @@ class NotionService:
         )
         page_id = page_resp["id"]
 
-        # 2) 본문 블록 구성
+        # 본문
         blocks: List[dict] = [
             # 학습 목표
             {
@@ -242,7 +197,7 @@ class NotionService:
             })
         blocks.append({"object":"block","type":"divider","divider":{}})
 
-        # 🤖 AI 요약
+        # AI블록
         blocks.extend([
             {
                 "object":"block","type":"heading_2",
@@ -261,13 +216,12 @@ class NotionService:
             }
         ])
 
-        # 3) 한 번에 children append
         append_resp = await self._make_request(
             "PATCH",
             f"blocks/{page_id}/children",
             json={"children": blocks}
         )
-        ai_block_id = append_resp["results"][-1]["id"]  # 마지막 code 블록 ID
+        ai_block_id = append_resp["results"][-1]["id"] #AI 요약 블록 ID
 
         return page_id, ai_block_id
     
@@ -311,3 +265,134 @@ class NotionService:
             next_cursor = resp.get("next_cursor")
             print(pages)
         return pages
+    
+    async def get_page_content(self, page_id: str) -> Dict[str, Any]:
+        """
+        주어진 Notion 페이지의 모든 블록을 반환.
+        반환값 예시:
+        {
+            "blocks": [
+                {
+                    "id": "xxxxxxxx",
+                    "type": "paragraph",
+                    "paragraph": {"text": [{"type": "text", "text": {"content": "테스트 페이지 내용입니다."}}]}
+                },
+                ...
+            ]
+        }
+        """
+        resp = await self._make_request(
+            "GET",
+            f"blocks/{page_id}/children"
+        )
+        return resp
+    
+    async def update_page_properties(self, page_id: str, props: Dict[str, Any]) -> None:
+        """
+        Notion 페이지의 속성(properties)만 업데이트합니다.
+        """
+        if not props:
+            return
+        await self._make_request(
+            "PATCH",
+            f"pages/{page_id}",
+            json={"properties": props}
+        )
+
+    async def update_goal_section(self,page_id: str, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None) -> None:
+        """
+        학습 목표 섹션(quote, to_do) 업데이트
+        """
+        # 1) 모든 블록 조회
+        resp = await self._make_request(
+            "GET",
+            f"blocks/{page_id}/children",
+            params={"page_size": 100}
+        )
+        blocks = resp.get("results", [])
+
+        # 2) 목표 섹션 헤더 위치 찾기
+        start_idx = None
+        quote_block = None
+        todo_blocks = []
+        for idx, block in enumerate(blocks):
+            if block.get("type") == "heading_2" and "🧠 학습 목표" in block["heading_2"]["rich_text"][0]["text"]["content"]:
+                start_idx = idx
+                continue
+            if start_idx is not None:
+                if block.get("type") == "quote":
+                    quote_block = block
+                elif block.get("type") == "to_do":
+                    todo_blocks.append(block)
+                elif block.get("type") == "heading_2":
+                    break
+
+        # 3) quote 업데이트
+        if goal_intro is not None and quote_block:
+            await self._make_request(
+                "PATCH",
+                f"blocks/{quote_block['id']}",
+                json={
+                    "quote": {"rich_text": [{"type": "text", "text": {"content": goal_intro}}]}
+                }
+            )
+
+        # 4) to_do 업데이트
+        if goals is not None:
+            # 기존 to_do 삭제
+            for block in todo_blocks:
+                await self._make_request("DELETE", f"blocks/{block['id']}")
+            # 새 to_do 추가
+            children = []
+            for goal in goals:
+                children.append({
+                    "object": "block",
+                    "type": "to_do",
+                    "to_do": {"rich_text": [{"type": "text", "text": {"content": goal}}], "checked": False}
+                })
+            if quote_block and children:
+                await self._make_request(
+                    "PATCH",
+                    f"blocks/{quote_block['id']}/children",
+                    json={"children": children}
+                )
+
+    async def update_ai_summary_by_block(self, block_id: str, summary: str) -> None:
+        """
+        AI 요약 블록 ID를 알고 있을 때, 해당 블록을 바로 업데이트
+        """
+        await self._make_request(
+            "PATCH",
+            f"blocks/{block_id}",
+            json={
+                "code": {
+                    "rich_text": [{"type": "text", "text": {"content": summary}}],
+                    "language": "markdown"
+                }
+            }
+        )
+
+    async def update_learning_page_comprehensive(self, ai_block_id: str, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
+        """
+        page_id 받아서 각 속성마다 존재한다면 업데이트
+        1. 속성 업데이트
+        2. 목표 섹션 업데이트
+        3. 요약 블록 업데이트
+        테스크에 담긴 작업들을 병렬로 실행
+        """
+        tasks = []
+
+        # 1) 속성 업데이트
+        if props:
+            tasks.append(self.update_page_properties(page_id, props))
+
+        # 2) 목표 섹션
+        if goal_intro is not None or goals is not None:
+            tasks.append(self.update_goal_section(page_id, goal_intro, goals))
+
+        # 3) 요약 블록
+        if ai_block_id is not None:
+            tasks.append(self.update_ai_summary_by_block(ai_block_id, summary))
+
+        if tasks:
+            await asyncio.gather(*tasks)

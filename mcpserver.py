@@ -1,4 +1,4 @@
-from typing import Any, List, Dict
+from typing import Any, List, Dict, Optional
 import httpx
 from mcp.server.fastmcp import FastMCP
 
@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("studyai")
 
 # StudyAI API 서버 주소
-STUDYAI_API = "https://bond-sail-prohibited-replied.trycloudflare.com"
+STUDYAI_API = "https://application-pencil-terminals-rights.trycloudflare.com"
 
 WEBHOOK_CREATE_URL = "https://hook.eu2.make.com/39qh7m7j3ghar2r52i6w8aygn5n1526c"  # 웹훅 생성 시나리오 URL
 WEBHOOK_DELETE_URL = "https://hook.eu1.make.com/hijklmn67890"  # 웹훅 삭제 시나리오 URL
@@ -308,7 +308,7 @@ async def retry_failed_monitoring_operations() -> str:
 
 @mcp.tool()
 async def create_learning_database(title: str) -> str:
-    """새로운 학습 데이터베이스를 생성합니다.
+    """새 학습 데이터베이스를 생성.
     
     Args:
         title: 생성할 데이터베이스의 제목
@@ -326,6 +326,50 @@ async def create_learning_database(title: str) -> str:
             return f"성공적으로 학습 데이터베이스가 생성되었습니다: {title}"
         except Exception as e:
             return f"데이터베이스 생성 중 오류 발생: {str(e)}"
+        
+# 페이지 업데이트
+@mcp.tool()
+async def update_learning_page(page_id: str,props: Optional[Dict[str, Any]] = None,goal_intro: Optional[str] = None,goals: Optional[List[str]] = None,summary: Optional[str] = None) -> str:
+    """
+    학습 페이지 부분 업데이트
+    수정영역:(백틱 사용 금지)
+    - props: 제목·날짜·상태·복습여부 등 속성
+    - goal_intro/goals: 목표 섹션의 인용문과 to_do
+    - summary: AI 요약 블록 내용
+    
+    예시:
+    {
+    "page_id": page_id,
+    "props": {"학습 제목": {"title":[{"text":{"content":"새 제목"}}]}},
+    "goal_intro": "목표 개요",
+    "goals": ["목표1", "목표2"],
+    "summary": {"summary": "AI 요약\\n줄바꿈시 이렇게 작성"}
+    }
+    """
+    url = f"{STUDYAI_API}/learning/pages/{page_id}"
+    payload: Dict[str, Any] = {}
+
+    if props:
+        payload['props'] = props
+
+    if goal_intro is not None or goals is not None:
+        content: Dict[str, Any] = {}
+        if goal_intro is not None:
+            content['goal_intro'] = goal_intro
+        if goals is not None:
+            content['goals'] = goals
+        payload['content'] = content
+
+    if summary is not None:
+        payload['summary'] = summary
+
+    async with httpx.AsyncClient() as client:
+        try:
+            resp = await client.patch(url, json=payload, timeout=30.0)
+            resp.raise_for_status()
+            return "학습 페이지가 성공적으로 업데이트되었습니다."
+        except Exception as e:
+            return f"페이지 업데이트 중 오류 발생: {str(e)}"
 
 # TODO: 30-75분 작업 - GitHub Webhook 엔드포인트 구현
 # 1. FastAPI 라우터 추가

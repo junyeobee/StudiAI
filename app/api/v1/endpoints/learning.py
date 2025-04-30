@@ -1,29 +1,23 @@
 """
-학습 관련 API 엔드포인트
+학습 DB의 하위 페이지 관련 API 엔드포인트
 """
 from fastapi import APIRouter, HTTPException
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
-from app.services.learning_service import LearningService
 from app.services.notion_service import NotionService
 from app.models.learning import (
-    LearningPlan,
-    LearningPlanCreate,
-    LearningPlanUpdate,
-    LearningPlanResponse,
-    LearningSummary,
-    LearningPagesRequest
+    LearningPagesRequest,
+    PageUpdateRequest
 )
 from app.services.supa import (
     insert_learning_page,
-    get_used_notion_db_id
-    
+    get_used_notion_db_id,
+    get_ai_block_id_by_page_id
 )
 from app.core.exceptions import DatabaseError
 from app.utils.logger import api_logger
 
 router = APIRouter()
-learning_service = LearningService()
 notion_service = NotionService()
 
 class PageRequest(BaseModel):
@@ -33,15 +27,6 @@ class PageRequest(BaseModel):
 class SummaryRequest(BaseModel):
     page_id: str
     summary: str
-
-@router.get("/pages", response_model=List[LearningPlan])
-async def get_learning_plans():
-    """학습 계획 목록 조회"""
-    try:
-        plans = await notion_service.get_learning_plans()
-        return plans
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 #현재 학습 중인 db 조회
 @router.get("/pages/currentUsedDB")
@@ -85,69 +70,23 @@ async def create_pages(req: LearningPagesRequest):
         "results": results
     }
 
-#####################미사용######################
-@router.get("/plans/{plan_id}", response_model=LearningPlan)
-async def get_learning_plan(plan_id: str):
-    """특정 학습 계획 조회"""
-    try:
-        plan = await notion_service.get_learning_plan(plan_id)
-        return plan
-    except Exception as e:
-        raise HTTPException(status_code=404, detail=f"Learning plan not found: {str(e)}")
-
-@router.post("/plans", response_model=LearningPlan)
-async def create_learning_plan(plan: LearningPlanCreate):
-    """새로운 학습 계획 생성"""
-    try:
-        new_plan = await notion_service.create_learning_plan(plan)
-        return new_plan
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.post("/pages/summary")
-def fill_summary(req: SummaryRequest):
-    """요약 블록 내용 업데이트"""
-    ai_block_id = notion_service.get_ai_block_id_by_page_id(req.page_id)
-    if not ai_block_id:
-        return { "error": "해당 페이지의 요약 블록 ID를 찾을 수 없습니다." }
-
-    notion_service.update_ai_summary_block(ai_block_id, req.summary)
-    return { "status": "updated" }
-
-@router.post("/pages/summary", response_model=LearningSummary)
-async def create_learning_summary(page_id: str, summary: str):
-    """학습 요약 생성"""
-    try:
-        return await learning_service.create_learning_summary(page_id, summary)
-    except DatabaseError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-@router.get("/page/summary/{page_id}", response_model=LearningSummary)
-async def get_learning_summary(page_id: str):
-    """학습 요약 조회"""
-    try:
-        summary = learning_service.get_learning_summary(page_id)
-        if not summary:
-            raise HTTPException(status_code=404, detail="학습 요약을 찾을 수 없습니다.")
-        return summary
-    except DatabaseError as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
-
-@router.delete("/plans/{plan_id}")
-async def delete_learning_plan(plan_id: str):
-    """학습 계획 삭제"""
-    try:
-        await notion_service.delete_learning_plan(plan_id)
-        return {"message": "Learning plan deleted successfully"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+@router.patch("/pages/{page_id}")
+async def patch_page(page_id: str, req: PageUpdateRequest):
+    props = req.props.model_dump(by_alias=True) if req.props else None
+    goal_intro = req.content.goal_intro if req.content else None
+    goals = req.content.goals if req.content else None
+    summary = req.summary.summary if req.summary else None
+    if summary is not None:
+        ai_block_id = await get_ai_block_id_by_page_id(page_id)
+    else:
+        ai_block_id = None
     
-@router.put("/pages/{plan_id}", response_model=LearningPlan)
-async def update_learning_plan(plan_id: str, plan: LearningPlanUpdate):
-    """학습 계획 수정"""
-    try:
-        updated_plan = await notion_service.update_learning_plan(plan_id, plan)
-        return updated_plan
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-###########################################
+    await notion_service.update_learning_page_comprehensive(
+        ai_block_id,
+        page_id,
+        props=props,
+        goal_intro=goal_intro,
+        goals=goals,
+        summary=summary
+    )
+    return {"status":"success", "page_id": page_id}
