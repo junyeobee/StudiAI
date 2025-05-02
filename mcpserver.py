@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("studyai")
 
 # StudyAI API 서버 주소
-STUDYAI_API = "https://application-pencil-terminals-rights.trycloudflare.com"
+STUDYAI_API = "https://powers-media-nottingham-eds.trycloudflare.com"
 
 WEBHOOK_CREATE_URL = "https://hook.eu2.make.com/39qh7m7j3ghar2r52i6w8aygn5n1526c"  # 웹훅 생성 시나리오 URL
 WEBHOOK_DELETE_URL = "https://hook.eu1.make.com/hijklmn67890"  # 웹훅 삭제 시나리오 URL
@@ -46,27 +46,6 @@ async def create_learning_pages(notion_db_id: str, plans: List[Dict[str, Any]]) 
             return f"학습 페이지 {created}개를 성공적으로 했습니다!"
         except Exception as e:
             return f"학습 페이지 생성 중 오류: {str(e)}"
-
-@mcp.tool()
-async def update_summary(page_id: str, summary: str) -> str:
-    """페이지 요약 블록을 업데이트합니다.
-    
-    Args:
-        page_id: Notion 페이지 ID
-        summary: 업데이트할 요약 내용
-    """
-    url = f"{STUDYAI_API}/learning/pages/{page_id}/summary"
-    payload = {
-        "summary": summary
-    }
-    
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(url, json=payload, timeout=30.0)
-            response.raise_for_status()
-            return "요약이 성공적으로 업데이트되었습니다."
-        except Exception as e:
-            return f"요약 업데이트 중 오류 발생: {str(e)}"
         
 @mcp.tool()
 async def get_current_learning_database() -> str:
@@ -343,7 +322,7 @@ async def update_learning_page(page_id: str,props: Optional[Dict[str, Any]] = No
     "props": {"학습 제목": {"title":[{"text":{"content":"새 제목"}}]}},
     "goal_intro": "목표 개요",
     "goals": ["목표1", "목표2"],
-    "summary": {"summary": "AI 요약\\n줄바꿈시 이렇게 작성"}
+    "summary": "AI 요약\\n줄바꿈시 이렇게 작성"
     }
     """
     url = f"{STUDYAI_API}/learning/pages/{page_id}"
@@ -361,7 +340,7 @@ async def update_learning_page(page_id: str,props: Optional[Dict[str, Any]] = No
         payload['content'] = content
 
     if summary is not None:
-        payload['summary'] = summary
+        payload['summary'] = { "summary": summary }
 
     async with httpx.AsyncClient() as client:
         try:
@@ -370,6 +349,21 @@ async def update_learning_page(page_id: str,props: Optional[Dict[str, Any]] = No
             return "학습 페이지가 성공적으로 업데이트되었습니다."
         except Exception as e:
             return f"페이지 업데이트 중 오류 발생: {str(e)}"
+
+@mcp.tool()
+async def get_page_content(page_id: str) -> str:
+    """페이지 컨텐츠 조회"""
+    url = f"{STUDYAI_API}/learning/pages/{page_id}/content"
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.get(url, timeout=30.0)
+            response.raise_for_status()
+            return response.json()
+        except Exception as e:
+            return f"페이지 컨텐츠 조회 중 오류 발생: {str(e)}"
+    
+    
+
 
 # TODO: 30-75분 작업 - GitHub Webhook 엔드포인트 구현
 # 1. FastAPI 라우터 추가

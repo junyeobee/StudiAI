@@ -72,6 +72,7 @@ async def create_pages(req: LearningPagesRequest):
 
 @router.patch("/pages/{page_id}")
 async def patch_page(page_id: str, req: PageUpdateRequest):
+    print(req)
     props = req.props.model_dump(by_alias=True) if req.props else None
     goal_intro = req.content.goal_intro if req.content else None
     goals = req.content.goals if req.content else None
@@ -90,3 +91,14 @@ async def patch_page(page_id: str, req: PageUpdateRequest):
         summary=summary
     )
     return {"status":"success", "page_id": page_id}
+
+
+# 완료
+@router.get("/pages/{page_id}/content")
+async def get_content(page_id: str):
+    try:
+        data = await notion_service.get_page_content(page_id)
+        blocks = [notion_service.block_content(b) for b in data["blocks"]]
+        return blocks
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

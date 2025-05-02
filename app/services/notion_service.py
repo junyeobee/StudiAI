@@ -30,7 +30,7 @@ class NotionService:
             "Notion-Version": self.api_version,
             "Content-Type": "application/json"
         }
-
+    # 노션 API 요청 공통 메서드
     @async_retry(max_retries=3, delay=1.0, backoff=2.0)
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Notion API 요청을 보내는 공통 메서드"""
@@ -153,12 +153,11 @@ class NotionService:
             notion_logger.error(f"데이터베이스 업데이트 실패: {str(e)}")
             raise NotionAPIError(f"데이터베이스 업데이트 실패: {str(e)}")
         
-
+    # 학습 페이지 생성
     async def create_learning_page(self, database_id: str, plan: LearningPageCreate) -> tuple[str, str]:
         """
-        • 페이지를 생성하고  
-        • 학습 목표 · AI 요약 블록을 자동으로 채운 뒤  
-        • (page_id, ai_block_id) 튜플을 반환
+        - 페이지를 생성하고 학습 목표, AI 요약 블록 템플릿 추가
+        - (page_id, ai_block_id) 튜플을 반환
         """
         # 1) 페이지 속성
         props = {
@@ -225,7 +224,7 @@ class NotionService:
 
         return page_id, ai_block_id
     
-
+    # 데이터베이스 내 모든 페이지 조회
     async def list_all_pages(self, database_id: str) -> List[Dict[str, Any]]:
         """
         주어진 Notion 데이터베이스의 모든 행(row) 페이지를 반환.
@@ -266,27 +265,7 @@ class NotionService:
             print(pages)
         return pages
     
-    async def get_page_content(self, page_id: str) -> Dict[str, Any]:
-        """
-        주어진 Notion 페이지의 모든 블록을 반환.
-        반환값 예시:
-        {
-            "blocks": [
-                {
-                    "id": "xxxxxxxx",
-                    "type": "paragraph",
-                    "paragraph": {"text": [{"type": "text", "text": {"content": "테스트 페이지 내용입니다."}}]}
-                },
-                ...
-            ]
-        }
-        """
-        resp = await self._make_request(
-            "GET",
-            f"blocks/{page_id}/children"
-        )
-        return resp
-    
+    # 페이지 속성 업데이트
     async def update_page_properties(self, page_id: str, props: Dict[str, Any]) -> None:
         """
         Notion 페이지의 속성(properties)만 업데이트합니다.
@@ -299,11 +278,12 @@ class NotionService:
             json={"properties": props}
         )
 
+    # 학습 목표 섹션 업데이트
     async def update_goal_section(self,page_id: str, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None) -> None:
         """
         학습 목표 섹션(quote, to_do) 업데이트
         """
-        # 1) 모든 블록 조회
+        # 1. 모든 블록 조회
         resp = await self._make_request(
             "GET",
             f"blocks/{page_id}/children",
@@ -311,7 +291,7 @@ class NotionService:
         )
         blocks = resp.get("results", [])
 
-        # 2) 목표 섹션 헤더 위치 찾기
+        # 2. 목표 섹션 헤더 위치 찾기
         start_idx = None
         quote_block = None
         todo_blocks = []
@@ -327,7 +307,7 @@ class NotionService:
                 elif block.get("type") == "heading_2":
                     break
 
-        # 3) quote 업데이트
+        # 3. quote 업데이트
         if goal_intro is not None and quote_block:
             await self._make_request(
                 "PATCH",
@@ -337,7 +317,7 @@ class NotionService:
                 }
             )
 
-        # 4) to_do 업데이트
+        # 4. to_do 업데이트
         if goals is not None:
             # 기존 to_do 삭제
             for block in todo_blocks:
@@ -357,9 +337,10 @@ class NotionService:
                     json={"children": children}
                 )
 
+    # 요약 블록 업데이트
     async def update_ai_summary_by_block(self, block_id: str, summary: str) -> None:
         """
-        AI 요약 블록 ID를 알고 있을 때, 해당 블록을 바로 업데이트
+        AI 요약 블록 ID를 받아서 해당 블록 업데이트
         """
         await self._make_request(
             "PATCH",
@@ -372,6 +353,7 @@ class NotionService:
             }
         )
 
+    # 학습 페이지 종합 업데이트
     async def update_learning_page_comprehensive(self, ai_block_id: str, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
         """
         page_id 받아서 각 속성마다 존재한다면 업데이트
@@ -382,17 +364,53 @@ class NotionService:
         """
         tasks = []
 
-        # 1) 속성 업데이트
+        # 1. 속성 업데이트
         if props:
             tasks.append(self.update_page_properties(page_id, props))
 
-        # 2) 목표 섹션
+        # 2. 목표 섹션
         if goal_intro is not None or goals is not None:
             tasks.append(self.update_goal_section(page_id, goal_intro, goals))
 
-        # 3) 요약 블록
+        # 3. 요약 블록
         if ai_block_id is not None:
             tasks.append(self.update_ai_summary_by_block(ai_block_id, summary))
 
         if tasks:
             await asyncio.gather(*tasks)
+
+    # 페이지 메타 및 블록 조회
+    async def get_page_content(self, page_id: str) -> Dict[str, Any]:
+        blocks, cursor = [], None
+        while True:
+            resp = await self._make_request(
+                "GET", f"blocks/{page_id}/children",
+                #dict unpacking -> cursor 있으면 추가, 없으면 빈 딕셔너리
+                params={"page_size": 100, **({"start_cursor": cursor} if cursor else {})}
+            )
+            blocks.extend(resp["results"])
+            if not resp.get("has_more"):
+                break
+            cursor = resp["next_cursor"]
+        return {"blocks": blocks}
+    
+
+
+    # 페이지 컨텐츠 중 필요한 부분만 추려내기
+    def block_content(self, block: dict) -> dict:
+        btype = block["type"]
+        base = {"id": block["id"], "type": btype, "children": block["has_children"]}
+        match btype:
+            case "heading_2" | "heading_3" | "heading_1":
+                base["text"] = block[btype]["rich_text"][0]["text"]["content"]
+            case "quote":
+                base["text"] = block["quote"]["rich_text"][0]["text"]["content"]
+            case "to_do":
+                base["text"] = block["to_do"]["rich_text"][0]["text"]["content"]
+                base["checked"] = block["to_do"]["checked"]
+            case "code":
+                base["text"] = block["code"]["rich_text"][0]["text"]["content"]
+                base["lang"] = block["code"]["language"]
+            case _:
+                base["text"] = ""
+        return base
