@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("studyai")
 
 # StudyAI API 서버 주소
-STUDYAI_API = "https://powers-media-nottingham-eds.trycloudflare.com"
+STUDYAI_API = "https://customers-delivers-test-sitemap.trycloudflare.com"
 
 WEBHOOK_CREATE_URL = "https://hook.eu2.make.com/39qh7m7j3ghar2r52i6w8aygn5n1526c"  # 웹훅 생성 시나리오 URL
 WEBHOOK_DELETE_URL = "https://hook.eu1.make.com/hijklmn67890"  # 웹훅 삭제 시나리오 URL
@@ -25,7 +25,7 @@ async def create_learning_pages(notion_db_id: str, plans: List[Dict[str, Any]]) 
                  "date": "2025-04-29T09:00:00Z" 날짜 형식은 ISO 8601 형식으로 작성해주세요.
                  "status": "시작 전", # ENUM 형식(시작 전, 진행중, 완료)
                  "revisit": false, #복습 여부
-                 "goal": ["React 컴포넌트 개념 이해하기"],
+                 "goals": ["React 컴포넌트 개념 이해하기"],
                  "summary": "JSX·props·state에 집중한다"
                  "goal_intro": "컴포넌트의 기본 개념을 이해하고, 컴포넌트를 사용하는 방법 배우기"
                }
@@ -322,7 +322,7 @@ async def update_learning_page(page_id: str,props: Optional[Dict[str, Any]] = No
     "props": {"학습 제목": {"title":[{"text":{"content":"새 제목"}}]}},
     "goal_intro": "목표 개요",
     "goals": ["목표1", "목표2"],
-    "summary": "AI 요약\\n줄바꿈시 이렇게 작성"
+    "summary": "마크다운 형식으로 작성\\n 줄바꿈시 이렇게 작성"
     }
     """
     url = f"{STUDYAI_API}/learning/pages/{page_id}"
