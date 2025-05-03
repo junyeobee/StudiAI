@@ -29,11 +29,12 @@ PAGE_MAP: dict[str, dict] = {
 
 # Page Dispatcher
 @mcp.tool()
-async def page(action: str, **params) -> str:
+async def page_tool(action: str, params: dict) -> str:
     """
+    Notion 페이지 관리
     action = list | create | get | update | delete
-    생성(create): payload → {"notion_db_id": <str>, "plans": [LearningPageCreate]}
-    수정(update): payload → PageUpdateRequest
+    생성(create): payload:{{"notion_db_id": <str>, "plans": [LearningPageCreate]}}
+    수정(update): payload:{PageUpdateRequest}
     삭제(delete): page_id 필수
     조회(get): None(활성화DB)|page_id(특정DB)
     자세한 스키마 → models/learning.py
@@ -42,7 +43,10 @@ async def page(action: str, **params) -> str:
     if not spec:
         return "지원하지 않는 action입니다."
 
-    url = f"{STUDYAI_API}/learning/pages{spec['path'](params)}"
+    raw_path = spec["path"] 
+    path = raw_path(params) if callable(raw_path) else raw_path
+    url = f"{STUDYAI_API}/learning/pages{path}"
+    print(params.get("payload"))
     body = params.get("payload") if spec["needs_json"] else None
 
     try:
@@ -74,22 +78,26 @@ DB_MAP = {
 
 # DB Dispatcher
 @mcp.tool()
-async def database(action: str, **p) -> str:
+async def database_tool(action: str, params: dict) -> str:
     """
+    노션 DB 관리
     action = list | current | create | activate | deactivate
-    생성(create) : payload → {"title": "<DB 제목>"}
+    생성(create) : payload:{{"title": "<DB 제목>"}}
     활성화(activate) : db_id 필수
-    비활성화(deactivate) : db_id 필수, payload {"end_status": true|false} 선택
+    비활성화(deactivate) : db_id 필수, payload:{{"end_status": true|false}} 선택
     조회(list) : db_id 필수
     자세한 스키마 → models/database.py
     """
     spec = DB_MAP.get(action)
     if not spec:
         return "지원하지 않는 action입니다."
-
-    path = spec["path"].format(**p)
+    
+    raw_path = spec["path"] 
+    path = raw_path(params) if callable(raw_path) else raw_path
     url = f"{STUDYAI_API}/databases{path}"
-    body = p.get("payload") if spec.get("needs_json") else None
+
+    print(params.get("payload"))
+    body = params.get("payload") if spec.get("needs_json") else None
 
     try:
         res = await _request(spec["method"], url, json=body)
@@ -99,7 +107,7 @@ async def database(action: str, **p) -> str:
         if e.response.status_code == 422 and action == "create":
             return "422 오류: payload에 title 키가 필요합니다."
         if e.response.status_code == 404 and action in ("activate", "deactivate"):
-            return f"404: db_id '{p.get('db_id')}'를 찾을 수 없습니다."
+            return f"404: db_id '{params.get('db_id')}'를 찾을 수 없습니다."
         return f"HTTP {e.response.status_code}: {e.response.text}"
 
     except Exception as e:
@@ -114,8 +122,9 @@ WEBHOOK_MAP = {
 
 # Webhook Dispatcher
 @mcp.tool()
-async def webhook(action: str, **params) -> str:
+async def webhook_tool(action: str, params: dict) -> str:
     """
+    웹훅/모니터링 관리
     action = start | stop | verify | retry
       start : 모든 DB 모니터링 시작
       stop : 모든 DB 모니터링 중지
@@ -126,7 +135,10 @@ async def webhook(action: str, **params) -> str:
     if not spec:
         return "지원하지 않는 action입니다."
 
-    url = f"{STUDYAI_API}/webhooks{spec['path']}"
+    raw_path = spec["path"] 
+    path = raw_path(params) if callable(raw_path) else raw_path
+    url = f"{STUDYAI_API}/webhooks{path}"
+
     try:
         resp = await _request(spec["method"], url, json=params.get("payload"))
 
