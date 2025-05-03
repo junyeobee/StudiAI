@@ -394,8 +394,6 @@ class NotionService:
             cursor = resp["next_cursor"]
         return {"blocks": blocks}
     
-
-
     # 페이지 컨텐츠 중 필요한 부분만 추려내기
     def block_content(self, block: dict) -> dict:
         btype = block["type"]
@@ -414,3 +412,11 @@ class NotionService:
             case _:
                 base["text"] = ""
         return base
+    
+    # 페이지 삭제
+    async def delete_page(self, page_id: str) -> None:
+        """
+        페이지 삭제
+        """
+        await self._make_request("PATCH", f"pages/{page_id}", json={"archived": True})
+        

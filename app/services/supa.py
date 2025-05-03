@@ -544,3 +544,14 @@ async def update_learning_database(db_id: str, update_data: dict) -> dict:
     except Exception as e:
         api_logger.error(f"데이터베이스 업데이트 실패: {str(e)}")
         return None
+    
+
+async def delete_learning_page(page_id: str) -> None:
+    """학습 페이지 삭제"""
+    try : 
+        await init_supabase()
+        await supabase.table("learning_pages").delete().eq("page_id", page_id).execute()
+    except Exception as e:
+        api_logger.error(f"학습 페이지 메타 삭제 실패: {str(e)}")
+        return None
+

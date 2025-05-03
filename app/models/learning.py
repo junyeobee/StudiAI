@@ -1,5 +1,5 @@
 """
-학습 관련 Pydantic 모델
+노션 페이지 생성/수정용 Pydantic 모델
 """
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -11,35 +11,67 @@ class LearningStatus(str, Enum):
     IN_PROGRESS = "진행중"
     COMPLETED = "완료"
 
+# ────────────────── Create ──────────────────
 class LearningPageCreate(BaseModel):
-    """단일 학습 페이지 생성 정보 (Notion DB 속성에 맞춤)"""
-    title: str = Field(..., description="학습 제목")
-    date:  datetime = Field(..., description="학습 날짜")
-    status: LearningStatus = Field(LearningStatus.START_PRE, description="진행 상태")
-    revisit: bool = Field(False, alias="복습 여부", description="복습 여부 (checkbox)")
-    goal_intro: str = Field("이 섹션에 학습의 목적이나 계획을 간단히 작성하세요." ,description="학습 목표 섹션 상단에 들어갈 인용문")
-    goals: List[str] = Field(..., description="학습 목표")
-    summary: str = Field(..., description="학습 요약")
+    """
+    노션 페이지 생성 예시 (plans[*])
+
+    {
+      "title": "컴포넌트 기본 개념",
+      "date":  "2025-04-29T09:00:00Z",
+      "status": "시작 전",
+      "revisit": false,
+      "goal_intro": "컴포넌트가 뭔지 파악",
+      "goals": ["JSX 이해", "props·state 차이 정리"],
+      "summary": "JSX·props·state 핵심 요약..."
+    }
+    """
+    title: str
+    date: datetime
+    status: Optional[LearningStatus] = Field(None, description="진행 상태(시작 전, 진행중, 완료)")
+    revisit: bool = Field(False, description="복습 여부")
+    goal_intro: str
+    goals: List[str]
+    summary: str
 
 class LearningPagesRequest(BaseModel):
-    """여러 학습 페이지 일괄 생성 요청"""
-    notion_db_id: str = Field(..., description="Notion 데이터베이스 ID")
-    plans: List[LearningPageCreate] = Field(..., description="생성할 학습 페이지 리스트")
+    """여러 페이지 일괄 생성 payload"""
+    notion_db_id: str
+    plans: List[LearningPageCreate]
 
+# ────────────────── Update ──────────────────
 class PagePropsUpdate(BaseModel):
-    title: Optional[str] = Field(None, description="학습 제목")
-    date: Optional[datetime] = Field(None, description="학습 날짜")
-    status: Optional[LearningStatus] = Field(None, alias="진행 상태", description="진행 상태")
-    revisit: Optional[bool] = Field(None, alias="복습 여부", description="복습 여부")
+    """페이지 기본 정보 업데이트"""
+    title: Optional[str] = None
+    date: Optional[datetime] = None
+    status: Optional[LearningStatus] = None
+    revisit: Optional[bool] = None
 
 class ContentUpdate(BaseModel):
-    goal_intro: Optional[str] = Field(None, description="목표 인용문")
-    goals: Optional[List[str]] = Field(None, description="학습 목표 리스트")
+    """페이지 컨텐츠 업데이트"""
+    goal_intro: Optional[str] = None
+    goals: Optional[List[str]] = None
 
 class SummaryUpdate(BaseModel):
-    summary: str = Field(..., description="AI 요약 블록 텍스트")
+    """페이지 요약 업데이트"""
+    summary: str
 
 class PageUpdateRequest(BaseModel):
+    """
+    노션 페이지 부분 업데이트 예시
+
+    {
+      "props": {
+        "title": "새 제목",
+        "status": "진행중"
+      },
+      "content": {
+        "goal_intro": "이번엔 라이프사이클까지",
+        "goals": ["라이프사이클 정리", "hook 기초"]
+      },
+      "summary": { "summary": "업데이트된 요약 ..." }
+    }
+    """
     props: Optional[PagePropsUpdate] = None
     content: Optional[ContentUpdate] = None
     summary: Optional[SummaryUpdate] = None

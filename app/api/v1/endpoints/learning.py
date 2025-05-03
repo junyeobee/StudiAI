@@ -12,7 +12,8 @@ from app.models.learning import (
 from app.services.supa import (
     insert_learning_page,
     get_used_notion_db_id,
-    get_ai_block_id_by_page_id
+    get_ai_block_id_by_page_id,
+    delete_learning_page
 )
 from app.core.exceptions import DatabaseError
 from app.utils.logger import api_logger
@@ -28,18 +29,36 @@ class SummaryRequest(BaseModel):
     page_id: str
     summary: str
 
-#현재 학습 중인 db 조회
-@router.get("/pages/currentUsedDB")
-async def list_all_learning_pages():
-    """현재 학습 중인 db 조회"""
+@router.get("/pages")
+async def list_learning_pages(current: bool = False,db_id: str | None = None):
+    """
+    학습 페이지 목록 조회
+    - current=true : 현재 used DB 기준
+    - db_id=<uuid> : 특정 DB 기준
+    둘 다 지정시 db_id 결과
+    """
     try:
-        db_id = await get_used_notion_db_id()
-        if not db_id:
+        target_db_id = db_id
+        if not target_db_id:
+            if current:
+                target_db_id = await get_used_notion_db_id()
+            else:
+                raise HTTPException(400, "db_id 또는 current=true 중 하나는 필수입니다.")
+
+        if not target_db_id:
             raise HTTPException(404, "활성화된 학습 DB가 없습니다.")
-        pages = await notion_service.list_all_pages(db_id)
-        return {"db_id": db_id, "total": len(pages), "pages": pages}
+
+        pages = await notion_service.list_all_pages(target_db_id)
+        return {
+            "db_id": target_db_id,
+            "total": len(pages),
+            "pages": pages
+        }
+
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
 async def create_pages(req: LearningPagesRequest):
@@ -100,5 +119,16 @@ async def get_content(page_id: str):
         data = await notion_service.get_page_content(page_id)
         blocks = [notion_service.block_content(b) for b in data["blocks"]]
         return blocks
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+
+# 페이지 삭제
+@router.delete("/pages/{page_id}")
+async def delete_page(page_id: str):
+    try:
+        await notion_service.delete_page(page_id)
+        await delete_learning_page(page_id)
+        return {"status": "deleted", "page_id": page_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
