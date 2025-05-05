@@ -23,7 +23,7 @@ class LearningPageCreate(BaseModel):
       "revisit": false,
       "goal_intro": "컴포넌트가 뭔지 파악",
       "goals": ["JSX 이해", "props·state 차이 정리"],
-      "summary": "JSX·props·state 핵심 요약..."
+      "summary": "AI요약 블록입니다."
     }
     """
     title: str
@@ -32,7 +32,7 @@ class LearningPageCreate(BaseModel):
     revisit: bool = Field(False, description="복습 여부")
     goal_intro: str
     goals: List[str]
-    summary: str
+    summary: str = Field("AI요약 블록입니다.", description="마크다운 형식으로 작성, 줄바꿈시 \\n 사용")
 
 class LearningPagesRequest(BaseModel):
     """여러 페이지 일괄 생성 payload"""
@@ -69,7 +69,7 @@ class PageUpdateRequest(BaseModel):
         "goal_intro": "이번엔 라이프사이클까지",
         "goals": ["라이프사이클 정리", "hook 기초"]
       },
-      "summary": { "summary": "업데이트된 요약 ..." }
+      "summary": { "summary": "마크다운 형식으로 작성, 줄바꿈시 \\n 사용" }
     }
     """
     props: Optional[PagePropsUpdate] = None

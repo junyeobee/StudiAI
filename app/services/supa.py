@@ -6,6 +6,8 @@ from app.core.config import settings
 from app.utils.logger import api_logger, webhook_logger
 import httpx
 from fastapi import Depends, Request
+from typing import Optional
+
 
 load_dotenv()
 
@@ -68,30 +70,43 @@ async def get_active_learning_database() -> dict:
         api_logger.error(f"활성 데이터베이스 조회 실패: {str(e)}")
         return None
 
-async def update_learning_database_status(db_id: str, status: str) -> dict:
+async def update_learning_database_status(db_id: Optional[str], status: str) -> dict:
     """학습 데이터베이스 상태 업데이트"""
     try:
         await init_supabase()
-        # 'used'로 변경하는 경우, 기존 used DB를 ready로 변경
-        if status == "used":
-            await supabase.table("learning_databases").update({
-                "status": "ready",
-                "updated_at": datetime.now().isoformat()
-            }).eq("status", "used").execute()
+
+        # 기존 used 상태인 레코드 여부
+        resp = await supabase.table("learning_databases") \
+            .select("id") \
+            .eq("status", "used") \
+            .limit(1) \
+            .execute()
+        old_id = resp.data[0]["id"] if resp.data else None
+
+        # 비활성화 요청 시, 활성화된 DB가 없으면 바로 None 반환
+        if status == "ready" and old_id is None:
+            return None
+
+        # RPC
+        new_db_id_param = db_id if status == "used" else None
+        res = await supabase.rpc("activate_db_transaction", {
+            "old_rec_id": old_id,
+            "new_db_id":  new_db_id_param
+        }).execute()
         
-        # 지정된 DB 상태 변경
-        update_data = {
-            "status": status,
-            "updated_at": datetime.now().isoformat()
-        }
+        data = res.data
+        if not data:
+            return None
+
+        if isinstance(data, list):
+            return data[0]
+        if isinstance(data, dict):
+            return data
+
+        return None
         
-        if status == "used":
-            update_data["last_used_date"] = datetime.now().isoformat()
-        
-        res = await supabase.table("learning_databases").update(update_data).eq("db_id", db_id).execute()
-        return res.data[0] if res.data else None
     except Exception as e:
-        api_logger.error(f"데이터베이스 상태 업데이트 실패: {str(e)}")
+        api_logger.error(f"DB 상태 업데이트 실패(db_id={db_id}, status={status}): {e}")
         return None
 
 async def update_last_used_date(id: int) -> bool:
@@ -535,14 +550,14 @@ async def deactivate_database(db_id: str, end_status: bool = False) -> bool:
         return False
 
 async def update_learning_database(db_id: str, update_data: dict) -> dict:
-    """학습 데이터베이스 정보 업데이트"""
+    """학습 DB 정보 업데이트"""
     try:
         await init_supabase()
         update_data["updated_at"] = datetime.now().isoformat()
         res = await supabase.table("learning_databases").update(update_data).eq("db_id", db_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
-        api_logger.error(f"데이터베이스 업데이트 실패: {str(e)}")
+        api_logger.error(f"DB 업데이트 실패: {str(e)}")
         return None
     
 

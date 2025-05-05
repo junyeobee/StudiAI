@@ -41,8 +41,19 @@ class NotionService:
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPError as e:
-            notion_logger.error(f"Notion API 요청 실패: {str(e)}")
-            raise NotionAPIError(f"API 요청 실패: {str(e)}")
+            # 요청 바디와 Notion 응답을 함께 로깅합니다.
+            body = kwargs.get("json") or kwargs.get("params")
+            status = e.response.status_code if e.response is not None else None
+            text = e.response.text if e.response is not None else str(e)
+            notion_logger.error(
+                f"⛔ Notion API 오류:\n"
+                f"   ▶ Method: {method}\n"
+                f"   ▶ URL   : {url}\n"
+                f"   ▶ Body  : {body}\n"
+                f"   ▶ Status: {status}\n"
+                f"   ▶ Error : {text}"
+            )
+            raise NotionAPIError(f"API 요청 실패: {text}")
 
     # 데이터베이스 생성
     async def create_database(self, title: str) -> str:
@@ -295,6 +306,7 @@ class NotionService:
         start_idx = None
         quote_block = None
         todo_blocks = []
+        print(f'blocks: {blocks}')
         for idx, block in enumerate(blocks):
             if block.get("type") == "heading_2" and "🧠 학습 목표" in block["heading_2"]["rich_text"][0]["text"]["content"]:
                 start_idx = idx
@@ -320,22 +332,30 @@ class NotionService:
         # 4. to_do 업데이트
         if goals is not None:
             # 기존 to_do 삭제
+            print(f'todo_blocks: {todo_blocks}')
             for block in todo_blocks:
+                print(f'block: {block}')
                 await self._make_request("DELETE", f"blocks/{block['id']}")
-            # 새 to_do 추가
-            children = []
+            
+            new_todos = []
             for goal in goals:
-                children.append({
+                new_todos.append({
                     "object": "block",
                     "type": "to_do",
-                    "to_do": {"rich_text": [{"type": "text", "text": {"content": goal}}], "checked": False}
+                    "to_do": {
+                        "rich_text": [{"type": "text", "text": {"content": goal}}],
+                        "checked": False
+                    }
                 })
-            if quote_block and children:
-                await self._make_request(
-                    "PATCH",
-                    f"blocks/{quote_block['id']}/children",
-                    json={"children": children}
-                )
+            payload = {
+                "children": new_todos,
+                "after" : quote_block['id']
+            }
+            await self._make_request(
+                "PATCH",
+                f"blocks/{page_id}/children",
+                json=payload
+            )
 
     # 요약 블록 업데이트
     async def update_ai_summary_by_block(self, block_id: str, summary: str) -> None:
@@ -360,24 +380,19 @@ class NotionService:
         1. 속성 업데이트
         2. 목표 섹션 업데이트
         3. 요약 블록 업데이트
-        테스크에 담긴 작업들을 병렬로 실행
         """
-        tasks = []
-
         # 1. 속성 업데이트
         if props:
-            tasks.append(self.update_page_properties(page_id, props))
+            await self.update_page_properties(page_id, props)
 
         # 2. 목표 섹션
         if goal_intro is not None or goals is not None:
-            tasks.append(self.update_goal_section(page_id, goal_intro, goals))
+            await self.update_goal_section(page_id, goal_intro, goals)
 
         # 3. 요약 블록
         if ai_block_id is not None:
-            tasks.append(self.update_ai_summary_by_block(ai_block_id, summary))
+            await self.update_ai_summary_by_block(ai_block_id, summary)
 
-        if tasks:
-            await asyncio.gather(*tasks)
 
     # 페이지 메타 및 블록 조회
     async def get_page_content(self, page_id: str) -> Dict[str, Any]:
@@ -393,25 +408,6 @@ class NotionService:
                 break
             cursor = resp["next_cursor"]
         return {"blocks": blocks}
-    
-    # 페이지 컨텐츠 중 필요한 부분만 추려내기
-    def block_content(self, block: dict) -> dict:
-        btype = block["type"]
-        base = {"id": block["id"], "type": btype, "children": block["has_children"]}
-        match btype:
-            case "heading_2" | "heading_3" | "heading_1":
-                base["text"] = block[btype]["rich_text"][0]["text"]["content"]
-            case "quote":
-                base["text"] = block["quote"]["rich_text"][0]["text"]["content"]
-            case "to_do":
-                base["text"] = block["to_do"]["rich_text"][0]["text"]["content"]
-                base["checked"] = block["to_do"]["checked"]
-            case "code":
-                base["text"] = block["code"]["rich_text"][0]["text"]["content"]
-                base["lang"] = block["code"]["language"]
-            case _:
-                base["text"] = ""
-        return base
     
     # 페이지 삭제
     async def delete_page(self, page_id: str) -> None:

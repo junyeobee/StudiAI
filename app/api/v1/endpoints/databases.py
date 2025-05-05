@@ -32,7 +32,7 @@ notion_service = NotionService()
 # 완료
 @router.get("/active")
 async def get_active_database():
-    """현재 활성화된 데이터베이스 조회"""
+    """현재 활성화된 DB 조회"""
     try:
         # Supabase에서 활성 데이터베이스 정보 조회
         db_info = await get_active_learning_database()
@@ -51,7 +51,7 @@ async def get_active_database():
 # 완료
 @router.get("/available")
 async def get_available_databases():
-    """학습 가능한 데이터베이스 목록 조회"""
+    """학습 가능한 DB 목록 조회"""
     try:
         available_dbs = await list_all_learning_databases()
         return {"status": "success", "data": available_dbs}
@@ -61,7 +61,7 @@ async def get_available_databases():
 # 완료
 @router.get("/", response_model=List[DatabaseInfo])
 async def list_databases():
-    """모든 학습 데이터베이스 목록 조회"""
+    """모든 학습 DB 목록 조회"""
     try:
         databases = await list_all_learning_databases()
         return databases
@@ -71,13 +71,13 @@ async def list_databases():
 # 완료
 @router.get("/{db_id}", response_model=DatabaseResponse)
 async def get_database(db_id: str):
-    """데이터베이스 정보 조회"""
+    """DB 정보 조회"""
     try:
         database = await notion_service.get_database(db_id)
         return DatabaseResponse(
             status="success",
             data=database,
-            message="데이터베이스 정보를 성공적으로 조회했습니다."
+            message="DB 정보를 성공적으로 조회했습니다."
         )
     except NotionAPIError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -85,7 +85,7 @@ async def get_database(db_id: str):
 # 완료
 @router.post("/", response_model=DatabaseResponse)
 async def create_database(db: DatabaseCreate):
-    """새로운 데이터베이스 생성"""
+    """새로운 DB 생성"""
     try:
         database = await notion_service.create_database(db.title)
         # Supabase에 데이터베이스 정보 저장
@@ -97,7 +97,7 @@ async def create_database(db: DatabaseCreate):
         return DatabaseResponse(
             status="success",
             data=database,
-            message="데이터베이스가 성공적으로 생성되었습니다."
+            message="DB 성공적으로 생성되었습니다."
         )
     except NotionAPIError as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -105,7 +105,7 @@ async def create_database(db: DatabaseCreate):
 # 완료
 @router.put("/{db_id}", response_model=DatabaseResponse)
 async def update_database(db_id: str, db_update: DatabaseUpdate):
-    """데이터베이스 정보 업데이트"""
+    """DB 정보 업데이트"""
     try:
         # 1. Notion API 업데이트
         notion_db = await notion_service.update_database(db_id, db_update)
@@ -152,16 +152,16 @@ async def activate_database(db_id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 # 완료
-@router.post("/{db_id}/deactivate")
-async def deactivate_database(db_id: str):
-    """데이터베이스 비활성화"""
+@router.post("/deactivate")
+async def deactivate_all_databases():
+    """활성화된 DB를 비활성화 상태로 변경합니다."""
     try:
-        result = await update_learning_database_status(db_id, "ready")
+        result = await update_learning_database_status(db_id=None, status="ready")
         if not result:
-            raise HTTPException(status_code=404, detail="데이터베이스를 찾을 수 없습니다.")
-        return {"status": "success", "message": "데이터베이스가 비활성화되었습니다."}
+            raise HTTPException(404, "활성화된 데이터베이스가 없습니다.")
+        return {"status":"success", "message":"모든 데이터베이스를 비활성화했습니다."}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(500, str(e))
 
 # 완료
 @router.get("/pages/{page_id}/databases", response_model=List[DatabaseMetadata])
@@ -172,3 +172,4 @@ async def get_page_databases(page_id: str):
         return databases
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) 
+

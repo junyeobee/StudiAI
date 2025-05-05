@@ -2,6 +2,7 @@
 학습 DB의 하위 페이지 관련 API 엔드포인트
 """
 from fastapi import APIRouter, HTTPException
+from fastapi.encoders import jsonable_encoder
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from app.services.notion_service import NotionService
@@ -17,6 +18,10 @@ from app.services.supa import (
 )
 from app.core.exceptions import DatabaseError
 from app.utils.logger import api_logger
+from app.utils.notion_utils import(
+    block_content,
+    serialize_page_props
+)
 
 router = APIRouter()
 notion_service = NotionService()
@@ -91,22 +96,25 @@ async def create_pages(req: LearningPagesRequest):
 
 @router.patch("/pages/{page_id}")
 async def patch_page(page_id: str, req: PageUpdateRequest):
-    print(req)
-    props = req.props.model_dump(by_alias=True) if req.props else None
-    goal_intro = req.content.goal_intro if req.content else None
-    goals = req.content.goals if req.content else None
-    summary = req.summary.summary if req.summary else None
+
+    payload = jsonable_encoder(req, by_alias=True, exclude_none=True)
+    props = payload.get("props")
+    content = payload.get("content")
+    summary = payload.get("summary").get("summary") if payload.get("summary") else None
+    
     if summary is not None:
         ai_block_id = await get_ai_block_id_by_page_id(page_id)
     else:
         ai_block_id = None
     
+    props = serialize_page_props(props)
+
     await notion_service.update_learning_page_comprehensive(
         ai_block_id,
         page_id,
-        props=props,
-        goal_intro=goal_intro,
-        goals=goals,
+        props=props if props else None,
+        goal_intro=content.get("goal_intro") if content else None,
+        goals=content.get("goals") if content else None,
         summary=summary
     )
     return {"status":"success", "page_id": page_id}
@@ -117,7 +125,7 @@ async def patch_page(page_id: str, req: PageUpdateRequest):
 async def get_content(page_id: str):
     try:
         data = await notion_service.get_page_content(page_id)
-        blocks = [notion_service.block_content(b) for b in data["blocks"]]
+        blocks = [block_content(b) for b in data["blocks"]]
         return blocks
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
