@@ -1,191 +1,179 @@
-from typing import Any, List, Dict, Optional
-import json, sys, logging
-import httpx
+from typing import Any, Callable, TypedDict
+import logging, httpx
+from enum import StrEnum
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.prompts import base
+from pydantic import ValidationError
 
-# FastMCP 서버 초기화
-mcp = FastMCP("studyai")
-logger = logging.getLogger("mcp.debug")
-if not logger.handlers:
-    h = logging.StreamHandler(sys.stderr)   # stderr → mcp.log
-    h.setFormatter(logging.Formatter('%(message)s'))
-    logger.addHandler(h)
-    logger.setLevel(logging.INFO)
+from app.models.learning import LearningPagesRequest, PageUpdateRequest
+from app.models.database import DatabaseCreate, DatabaseUpdate
 
-# StudyAI API 서버 주소
-STUDYAI_API = "https://ver-gentleman-ok-wound.trycloudflare.com"
+# ───────────────────────기본 세팅 ───────────────────────
+log = logging.getLogger("mcp")
+logging.basicConfig(level=logging.INFO)
 
-WEBHOOK_CREATE_URL = "https://hook.eu2.make.com/39qh7m7j3ghar2r52i6w8aygn5n1526c"  # 웹훅 생성 시나리오 URL
-WEBHOOK_DELETE_URL = "https://hook.eu1.make.com/hijklmn67890"  # 웹훅 삭제 시나리오 URL
+STUDYAI_API = "http://localhost:8000"
 
-# DisPathcer 요청 공통 메서드
-async def _request(method: str, url: str, **kwargs) -> httpx.Response:
-    async with httpx.AsyncClient() as client:
-        resp = await client.request(method, url, timeout=30.0, **kwargs)
-        resp.raise_for_status()
-        return resp
+mcp = FastMCP(
+    name="studyai",
+    instructions=(
+        "당신은 프로젝트/학습 관리 매니저입니다.\n"
+        "노션 DB·웹훅을 관리합니다.\n"
+        "모든 툴 호출은 params.payload 키를 포함해야 합니다."
+    ),
+)
 
-PAGE_MAP: dict[str, dict] = {
-    # action : {method, path_fn, needs_json}
-    "list": {"method": "GET", "path": lambda p: f"?db_id={p['db_id']}" if p.get("db_id") else "?current=true", "needs_json": False},
-    "create": {"method": "POST", "path": "/create", "needs_json": True},
-    "update": {"method": "PATCH", "path": lambda p: f"/{p['page_id']}", "needs_json": True},
-    "delete": {"method": "DELETE", "path": lambda p: f"/{p['page_id']}", "needs_json": False},
-    "get": {"method": "GET", "path": lambda p: f"/{p['page_id']}/content", "needs_json": False},
+# ─────────────────────── 모델 & 헬퍼 ───────────────────────
+class Route(TypedDict):
+    method: str
+    path: Callable[[dict[str, Any]], str]
+    needs_json: bool
+
+def _const(s: str) -> Callable[[dict[str, Any]], str]:
+    """상수 경로 람다 래퍼"""
+    return lambda _p: s
+
+class Group(StrEnum):
+    PAGE = "learning/pages"
+    DB = "databases"
+    WEB = "webhooks"
+
+# 각 endpoint에 대한 Action Map
+ACTION_MAP: dict[Group, dict[str, Route]] = {
+    Group.PAGE: {
+        "list": {"method":"GET", "path":lambda p:f"?db_id={p['db_id']}" if p.get("db_id") else "?current=true", "needs_json":False},
+        "create": {"method":"POST", "path":_const("/create"), "needs_json":True},
+        "update": {"method":"PATCH", "path":lambda p:f"/{p['page_id']}", "needs_json":True},
+        "delete": {"method":"DELETE", "path":lambda p:f"/{p['page_id']}", "needs_json":False},
+        "get": {"method":"GET", "path":lambda p:f"/{p['page_id']}/content", "needs_json":False},
+    },
+    Group.DB: {
+        "list": {"method":"GET", "path":_const("/available"), "needs_json":False},
+        "current": {"method":"GET", "path":_const("/active"), "needs_json":False},
+        "create": {"method":"POST", "path":_const("/"), "needs_json":True},
+        "activate": {"method":"POST", "path":lambda p:f"/{p['db_id']}/activate", "needs_json":False},
+        "deactivate": {"method":"POST", "path":_const("/deactivate"), "needs_json":False},
+        "update": {"method":"PATCH", "path":lambda p:f"/{p['db_id']}", "needs_json":True},
+    },
+    Group.WEB: {
+        "start": {"method":"POST", "path":_const("/monitor/all"), "needs_json":False},
+        "stop": {"method":"POST", "path":_const("/unmonitor/all"), "needs_json":False},
+        "verify": {"method":"POST", "path":_const("/verify"), "needs_json":False},
+        "retry": {"method":"POST", "path":_const("/retry"), "needs_json":False},
+    },
 }
 
-# Page Dispatcher
-@mcp.tool()
-async def page_tool(action: str, params: dict) -> str:
-    """
-    Notion 페이지 관리
-    action = list | create | get | update | delete
-    생성(create): payload:{{"notion_db_id": <str>, "plans": [LearningPageCreate]}}
-    수정(update): payload:{PageUpdateRequest}
-    삭제(delete): page_id 필수
-    조회(get): None(활성화DB)|page_id(특정DB)
-    자세한 스키마 → models/learning.py
-    """
-    spec = PAGE_MAP.get(action)
-    if not spec:
-        return "지원하지 않는 action입니다."
-
-    raw_path = spec["path"] 
-    path = raw_path(params) if callable(raw_path) else raw_path
-    url = f"{STUDYAI_API}/learning/pages{path}"
-    print(params.get("payload"))
-    body = params.get("payload") if spec["needs_json"] else None
-
-    try:
-        r = await _request(spec["method"], url, json=body)
-
-        # 성공 반환
-        return r.json() if action in ("list", "get") else f"page {action} 성공"
-
-    except httpx.HTTPStatusError as e:
-        # 서버가 4xx/5xx 반환
-        logger.info(json.dumps({
-            "tool": "database_tool",
-            "action": action,
-            "url": url,
-            "status": e.response.status_code,
-            "payload": body,
-            "resp_text": e.response.text
-        }, ensure_ascii=False))
-        if e.response.status_code == 422:
-            return (
-                "422 오류: payload 형식이 맞지 않습니다.\n"
-                "필수 키 → notion_db_id, plans (LearningPagesRequest 참고)"+body
-            )
-        return f"HTTP {e.response.status_code}: {e.response.text}"
-
-    except Exception as e:
-        # 네트워크 오류·타임아웃 등
-        return f"page {action} 호출 실패: {e}"
-
-DB_MAP = {
-    "list": {"method": "GET", "path": "/available"},
-    "current": {"method": "GET", "path": "/active"},
-    "create": {"method": "POST", "path": "/", "needs_json": True},
-    "activate": {"method": "POST", "path": lambda p: f"/{p['db_id']}/activate", "needs_json": False},
-    "deactivate": {"method": "POST", "path": "/deactivate", "needs_json": False},
-    "update": {"method": "PATCH", "path": lambda p: f"/{p['db_id']}", "needs_json": True},
-}
-# DB Dispatcher
-@mcp.tool()
-async def database_tool(action: str, params: dict) -> str:
-    """
-    노션 DB 관리
-    action = list | current | create | activate | deactivate | update
-    생성(create) : payload:{{"title": "<DB 제목>"}}
-    활성화(activate) : db_id 필수
-    비활성화(deactivate) : db_id 필수, payload:{{"end_status": true|false}} 선택
-    조회(list) : db_id 필수
-    수정(update) : db_id 필수, payload:{{"title": "<변경 시 변경할 DB 제목>"}}
-    자세한 스키마 → models/database.py
-    """
-    spec = DB_MAP.get(action)
-    if not spec:
-        return "지원하지 않는 action입니다."
-    
-    raw_path = spec["path"]
-    path = raw_path(params) if callable(raw_path) else raw_path
-    url = f"{STUDYAI_API}/databases{path}"
-
-    print(params.get("payload"))
-    body = params.get("payload") if spec.get("needs_json") else None
-
-    try:
-        res = await _request(spec["method"], url, json=body)
-        return res.json() if action in ("list", "current") else f"database {action} 성공"
-
-    except httpx.HTTPStatusError as e:
-        #디버깅용(지우기)
-        logger.info(json.dumps({
-            "tool": "database_tool",
-            "action": action,
-            "url": url,
-            "status": e.response.status_code,
-            "payload": body,
-            "resp_text": e.response.text
-        }, ensure_ascii=False))
-        if e.response.status_code == 422 and action == "create":
-            return "422 오류: payload에 title 키가 필요합니다."
-        if e.response.status_code == 404 and action in ("activate", "deactivate"):
-            return f"404: db_id '{params.get('db_id')}'를 찾을 수 없습니다."
-        return f"HTTP {e.response.status_code}: {e.response.text}"
-
-    except Exception as e:
-        return f"database {action} 호출 실패: {e}"
-
-WEBHOOK_MAP = {
-    "start": {"method": "POST", "path": "/monitor/all"},
-    "stop": {"method": "POST", "path": "/unmonitor/all"},
-    "verify": {"method": "POST", "path": "/verify"},
-    "retry": {"method": "POST", "path": "/retry"},
+PAYLOAD_MODEL = {
+    (Group.PAGE, "create"): LearningPagesRequest,
+    (Group.PAGE, "update"): PageUpdateRequest,
+    (Group.DB, "create"): DatabaseCreate,
+    (Group.DB, "update"): DatabaseUpdate,
 }
 
-# Webhook Dispatcher
-@mcp.tool()
-async def webhook_tool(action: str, params: dict) -> str:
-    """
-    웹훅/모니터링 관리
-    action = start | stop | verify | retry
-      start : 모든 DB 모니터링 시작
-      stop : 모든 DB 모니터링 중지
-      verify : 활성 웹훅 상태 점검
-      retry : 실패한 웹훅 작업 재시도
-    """
-    spec = WEBHOOK_MAP.get(action)
-    if not spec:
-        return "지원하지 않는 action입니다."
+ERROR_MSG = {
+    400: "400 Bad Request",
+    401: "401 Unauthorized",
+    403: "403 Forbidden",
+    404: "404 Not Found, ID 확인 필요",
+    422: "422 Unprocessable: payload 형식을 확인",
+    429: "429 Too Many Requests",
+    500: "500 Internal Server Error",
+}
 
-    raw_path = spec["path"] 
-    path = raw_path(params) if callable(raw_path) else raw_path
-    url = f"{STUDYAI_API}/webhooks{path}"
+#Http Client 싱글톤
+_client: httpx.AsyncClient | None = None
+
+async def get_client() -> httpx.AsyncClient:
+    global _client
+    if _client is None:
+        _client = httpx.AsyncClient(timeout=30.0)
+    return _client
+
+# Payload 준비 & 검증
+def _get_payload(group: Group, action: str, params: dict) -> dict | None:
+    spec = ACTION_MAP[group][action]
+    if not spec["needs_json"]:
+        return None
+
+    raw_payload = params.get("payload")
+    if raw_payload is None:
+        raise ValueError(f"{action} 액션에는 params.payload가 필요합니다.")
+
+    model_cls = PAYLOAD_MODEL.get((group, action))
+    if model_cls is None:
+        return raw_payload
 
     try:
-        resp = await _request(spec["method"], url, json=params.get("payload"))
+        return model_cls.model_validate(raw_payload).model_dump(mode="json")
+    except ValidationError as ve:
+        raise ValueError(f"payload 검증 실패: {ve}") from ve
 
-        # GET 형태는 상태 리포트 JSON, 나머지는 성공 메시지
-        return resp.json() if spec["method"] == "GET" else f"webhook {action} 성공"
+# 툴 디스패치
+async def dispatch(group: Group, action: str, params: dict) -> str:
+    spec = ACTION_MAP[group].get(action)
+    if not spec:
+        return f"{group.value} 지원되지 않는 action '{action}'"
+
+    try:
+        payload = _get_payload(group, action, params)
+    except ValueError as e:
+        return str(e)
+
+    path = spec["path"](params)
+    url  = f"{STUDYAI_API}/{group.value}{path}"
+
+    client = await get_client()
+    log.debug("→ %s %s", spec["method"], url)
+
+    try:
+        res = await client.request(spec["method"], url, json=payload)
+        res.raise_for_status()
+        if res.headers.get("content-type", "").startswith("application/json"):
+            return res.json()
+        return "성공"
 
     except httpx.HTTPStatusError as e:
-        return f"HTTP {e.response.status_code}: {e.response.text}"
-
+        code = e.response.status_code
+        return f"HTTP {code}: {ERROR_MSG.get(code, e.response.text)}"
     except Exception as e:
-        return f"webhook {action} 호출 실패: {e}"
+        return f"{group.value} {action} 실패: {e}"
 
-# TODO: 30-75분 작업 - GitHub Webhook 엔드포인트 구현
-# 1. FastAPI 라우터 추가
-# 2. 시그니처 검증 코드 구현
-# 3. payload 처리 로직 작성
+# ─────────────────────── MCP 툴 ───────────────────────
+@mcp.tool(description="Notion 페이지 관련 액션 처리 (list|create|update|delete|get)")
+async def page_tool(action: str, params: dict[str, Any]) -> str:
+    return await dispatch(Group.PAGE, action, params)
 
-# TODO: 75-120분 작업 - 통합 테스트 및 문서화
-# 1. pytest-asyncio로 create_learning_database 테스트
-# 2. /github_webhook 엔드포인트 테스트
-# 3. 더미 push 이벤트로 200 응답 확인
+@mcp.tool(description="학습 DB 관련 액션 처리 (list|current|create|activate|deactivate|update)")
+async def database_tool(action: str, params: dict[str, Any]) -> str:
+    return await dispatch(Group.DB, action, params)
 
-# 서버 실행
+@mcp.tool(description="웹훅/모니터링 액션 처리 (start|stop|verify|retry)")
+async def webhook_tool(action: str, params: dict[str, Any]) -> str:
+    return await dispatch(Group.WEB, action, params)
+
+# ───────────────────────초기 가이드 prompt ───────────────────────
+@mcp.prompt(name="Params Guide", description="툴 사용시 파라미터 형식 가이드")
+def guidelines() -> list[base.Message]:
+    guide = (
+        "호출 규칙 요약\n"
+        "**payload 필수**\n"
+        "- database_tool(create) : params.payload = DatabaseCreate\n"
+        "- database_tool(update) : params.payload = DatabaseUpdate\n"
+        "- page_tool(create) : params.payload = LearningPagesRequest\n"
+        "- ISO-8601 형식으로 날짜 입력, 예시: 2025-05-06T00:00:00+09:00Z\n"
+        "- summary 블럭은 마크다운 형식으로 작성, 예시: # 학습 제목\\n ## 학습 내용\\n 학습 내용 작성\\n ## 학습 내용\\n 학습 내용 작성\n"
+        "- page_tool(update) : params.payload = PageUpdateRequest\n"
+        "**payload 불필요**\n"
+        "- page_tool(list|delete|get)\n"
+        "- database_tool(list | current | activate | deactivate)\n"
+        "- webhook_tool(start | stop | verify | retry)\n"
+    )
+    return [
+        base.Message(
+            role="user",
+            content=base.TextContent(type="text", text=guide)
+        )
+    ]
+# ─────────────────────── run ───────────────────────
 if __name__ == "__main__":
-    mcp.run(transport='stdio')
+    mcp.run(transport="stdio")
