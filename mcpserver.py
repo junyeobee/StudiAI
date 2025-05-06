@@ -70,6 +70,26 @@ PAYLOAD_MODEL = {
     (Group.DB, "update"): DatabaseUpdate,
 }
 
+EXAMPLE_MAP: dict[str, str] = {
+    # DB 생성
+    "database_tool.create": (
+        "필수: title\n"
+        "{\"payload\":{\"title\":\"학습 제목\"}}"
+    ),
+
+    # 페이지 수정
+    "page_tool.update": (
+        "필수: page_id, payload[title,date,status,revisit,goal_intro,goals,summary]\n"
+        "{\"payload\":{\"page_id\":\"\",\"title\":\"새 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"진행중\",\"revisit\":true,\"goal_intro\":\"수정된 목표 소개\",\"goals\":[\"새 목표1\",\"새 목표2\"],\"summary\":\"수정된 요약\"}}"
+    ),
+
+    # 페이지 생성
+    "page_tool.create": (
+        "필수: notion_db_id, plans[title,date,status,revisit,goal_intro,goals,summary]\n"
+        "{\"payload\":{\"notion_db_id\":\"\",\"plans\":[{\"title\":\"학습 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"시작 전\",\"revisit\":false,\"goal_intro\":\"학습 목표 소개\",\"goals\":[\"목표1\",\"목표2\"],\"summary\":\"# 마크다운 형식 요약\\n내용...\"}]}}"
+    ),
+}
+
 ERROR_MSG = {
     400: "400 Bad Request",
     401: "401 Unauthorized",
@@ -151,15 +171,18 @@ async def database_tool(action: str, params: dict[str, Any]) -> str:
 async def webhook_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.WEB, action, params)
 
+@mcp.tool(description="요청 예시(액션명.기능 -> 파라미터 형식 반환)")
+def helper(action: str) -> str:
+    examples = EXAMPLE_MAP
+    return examples.get(action, "지원 안 함")
+
 # ───────────────────────초기 가이드 prompt ───────────────────────
 @mcp.prompt(name="Params Guide", description="툴 사용시 파라미터 형식 가이드")
 def guidelines() -> list[base.Message]:
     guide = (
         "호출 규칙 요약\n"
-        "**payload 필수**\n"
-        "- database_tool(create) : params.payload = DatabaseCreate\n"
-        "- database_tool(update) : params.payload = DatabaseUpdate\n"
-        "- page_tool(create) : params.payload = LearningPagesRequest\n"
+        "**params.payload 필수**\n"
+        "database_tool(create), page_tool(create), page_tool(update)\n"
         "- ISO-8601 형식으로 날짜 입력, 예시: 2025-05-06T00:00:00+09:00Z\n"
         "- summary 블럭은 마크다운 형식으로 작성, 예시: # 학습 제목\\n ## 학습 내용\\n 학습 내용 작성\\n ## 학습 내용\\n 학습 내용 작성\n"
         "- page_tool(update) : params.payload = PageUpdateRequest\n"
