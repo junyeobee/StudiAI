@@ -383,6 +383,7 @@ class NotionService:
         """
         # 1. 속성 업데이트
         if props:
+            print(1)
             await self.update_page_properties(page_id, props)
 
         # 2. 목표 섹션

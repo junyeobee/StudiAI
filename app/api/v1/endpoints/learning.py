@@ -107,7 +107,8 @@ async def patch_page(page_id: str, req: PageUpdateRequest):
     else:
         ai_block_id = None
     
-    props = serialize_page_props(props)
+    if props is not None:
+        props = serialize_page_props(props)
 
     await notion_service.update_learning_page_comprehensive(
         ai_block_id,
