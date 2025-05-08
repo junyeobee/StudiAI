@@ -114,6 +114,12 @@ ERROR_MSG = {
     500: "500 Internal Server Error",
 }
 
+# 확인 필요 메소드
+CONFIRMATION_REQUIRED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
+# 대기 중인 작업
+pending_confirmations = {}
+
 #Http Client 싱글톤
 _client: httpx.AsyncClient | None = None
 
@@ -142,12 +148,71 @@ def _get_payload(group: Group, action: str, params: dict) -> dict | None:
     except ValidationError as ve:
         raise ValueError(f"payload 검증 실패: {ve}") from ve
 
+def _is_confirmation_required(method: str) -> bool:
+    return method in CONFIRMATION_REQUIRED_METHODS
+    
+
+def _get_confirmation_id(group: Group, action: str, params: dict) -> str:
+    """확인 요청을 위한 고유 ID 생성"""
+    key_parts = [group.value, action]
+    
+    # 중요 식별자 추가
+    for key in ["db_id", "page_id"]:
+        if key in params:
+            key_parts.append(params[key])
+    
+    # 제목 정보 추가 (있는 경우)
+    if isinstance(params.get("payload"), dict) and "title" in params["payload"]:
+        key_parts.append(str(params["payload"]["title"]))
+        
+    return f"{'-'.join(key_parts)}"
+
+def _get_confirmation_message(group: Group, action: str, method: str, params: dict, confirmation_id: str) -> str:
+    """사용자 친화적인 확인 메시지 생성"""
+    # 작업 세부 정보 요약
+    changes = []
+    if method == "POST": changes.append("새로운 항목 생성")
+    elif method == "DELETE": changes.append("항목 삭제")
+    elif method in {"PUT", "PATCH"}: changes.append("항목 수정")
+    
+    # 중요 정보 추가
+    for key in ["db_id", "page_id"]:
+        if key in params:
+            changes.append(f"{key}: {params[key]}")
+    
+    # payload가 있으면 제목 정보 추가  
+    if isinstance(params.get("payload"), dict) and "title" in params["payload"]:
+        changes.append(f"제목: {params['payload']['title']}")
+        
+    return f"""
+## 실행 계획
+- 그룹: {group.value}
+- 작업: {action} ({method})
+- 변경사항: {', '.join(changes)}
+
+이 작업을 실행할까요? (예/아니오)
+[확인 코드: {confirmation_id}]
+"""
+
 # 툴 디스패치
 async def dispatch(group: Group, action: str, params: dict) -> str:
     spec = ACTION_MAP[group].get(action)
     if not spec:
         return f"{group.value} 지원되지 않는 action '{action}'"
+    
+    method = spec["method"]
+    
+    # 확인이 필요한 메소드인지 확인
+    if _is_confirmation_required(method):
+        confirmation_id = _get_confirmation_id(group, action, params)
+        
+        if pending_confirmations.get(confirmation_id):
+            del pending_confirmations[confirmation_id]
+        else:
+            pending_confirmations[confirmation_id] = False
+            return _get_confirmation_message(group, action, method, params, confirmation_id)
 
+    
     try:
         payload = _get_payload(group, action, params)
     except ValueError as e:
@@ -190,9 +255,6 @@ def helper(action: str) -> str:
     examples = EXAMPLE_MAP
     return examples.get(action, "지원 안 함")
 
-
-
-
 # ───────────────────────초기 가이드 prompt ───────────────────────
 @mcp.prompt(name="Params Guide", description="툴 사용시 파라미터 형식 가이드")
 def guidelines() -> list[base.Message]:
@@ -231,6 +293,7 @@ def base_guide() -> list[base.Message]:
             content=base.TextContent(type="text", text=guide)
         )
     ]
+
 # ─────────────────────── run ───────────────────────
 if __name__ == "__main__":
     mcp.run(transport="stdio")
