@@ -79,8 +79,8 @@ async def update_learning_database_status(db_id: Optional[str], status: str) -> 
         resp = await supabase.table("learning_databases") \
             .select("id") \
             .eq("status", "used") \
-            .limit(1) \
             .execute()
+        print(resp)
         old_id = resp.data[0]["id"] if resp.data else None
 
         # 비활성화 요청 시, 활성화된 DB가 없으면 바로 None 반환

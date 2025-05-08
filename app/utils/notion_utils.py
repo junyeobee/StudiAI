@@ -20,7 +20,7 @@ def serialize_page_props(props: dict) -> dict:
     return r
 
 # 페이지 컨텐츠 중 필요한 부분만 추려내기
-def block_content(self, block: dict) -> dict:
+def block_content(block: dict) -> dict:
     btype = block["type"]
     base = {"id": block["id"], "type": btype, "children": block["has_children"]}
     match btype:

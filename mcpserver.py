@@ -1,6 +1,6 @@
 from typing import Any, Callable, TypedDict
 import logging, httpx
-from enum import StrEnum
+from strenum import StrEnum
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.prompts import base
 from pydantic import ValidationError
@@ -20,7 +20,7 @@ mcp = FastMCP(
         "당신은 프로젝트/학습 관리 매니저입니다.\n"
         "노션 DB·웹훅을 관리합니다.\n"
         "모든 툴 호출은 params.payload 키를 포함해야 합니다."
-    ),
+    )
 )
 
 # ─────────────────────── 모델 & 헬퍼 ───────────────────────
@@ -88,6 +88,20 @@ EXAMPLE_MAP: dict[str, str] = {
         "필수: notion_db_id, plans[title,date,status,revisit,goal_intro,goals,summary]\n"
         "{\"payload\":{\"notion_db_id\":\"\",\"plans\":[{\"title\":\"학습 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"시작 전\",\"revisit\":false,\"goal_intro\":\"학습 목표 소개\",\"goals\":[\"목표1\",\"목표2\"],\"summary\":\"# 마크다운 형식 요약\\n내용...\"}]}}"
     ),
+
+    # DB 페이지 조회
+    "page_tool.list" : (
+        "params.db_id 파라미터 넣을 시 특정 DB 페이지 리스트 조회\n"
+        "파라미터 none: current DB의 리스트 조회"
+    ),
+
+    # DB 페이지 삭제
+    "page_tool.delete" : (
+        
+    ),
+
+    # DB 페이지 조회
+    
 }
 
 ERROR_MSG = {
@@ -109,7 +123,7 @@ async def get_client() -> httpx.AsyncClient:
         _client = httpx.AsyncClient(timeout=30.0)
     return _client
 
-# Payload 준비 & 검증
+# Payload 검증
 def _get_payload(group: Group, action: str, params: dict) -> dict | None:
     spec = ACTION_MAP[group][action]
     if not spec["needs_json"]:
@@ -167,7 +181,7 @@ async def page_tool(action: str, params: dict[str, Any]) -> str:
 async def database_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.DB, action, params)
 
-@mcp.tool(description="웹훅/모니터링 액션 처리 (start|stop|verify|retry)")
+@mcp.tool(description="웹훅/모니터링 액션 처리 (start|stop|verify|retry)") 
 async def webhook_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.WEB, action, params)
 
@@ -176,10 +190,14 @@ def helper(action: str) -> str:
     examples = EXAMPLE_MAP
     return examples.get(action, "지원 안 함")
 
+
+
+
 # ───────────────────────초기 가이드 prompt ───────────────────────
 @mcp.prompt(name="Params Guide", description="툴 사용시 파라미터 형식 가이드")
 def guidelines() -> list[base.Message]:
     guide = (
+        "자세한 요청 예시는 helper(액션명.기능) 호출\n"
         "호출 규칙 요약\n"
         "**params.payload 필수**\n"
         "database_tool(create), page_tool(create), page_tool(update)\n"
@@ -190,6 +208,22 @@ def guidelines() -> list[base.Message]:
         "- page_tool(list|delete|get)\n"
         "- database_tool(list | current | activate | deactivate)\n"
         "- webhook_tool(start | stop | verify | retry)\n"
+        "- 툴 호출시 한번에 한 요청만 처리합니다."
+    )
+    return [
+        base.Message(
+            role="user",
+            content=base.TextContent(type="text", text=guide)
+        )
+    ]
+
+@mcp.prompt(name="Base Guide", description="기본 지시사항")
+def base_guide() -> list[base.Message]:
+    guide = (
+        "툴 호출 시 한번에 한 요청만 처리합니다.\n"
+        "사용자의 요청이 끝날 때까지 기다리고 처리합니다.\n"
+        "모든 생성 요청 시 사용자의 요구사항을 반영해야 합니다\n"
+        "반드시 사용자에게 확인 후 처리해야 합니다.\n"
     )
     return [
         base.Message(

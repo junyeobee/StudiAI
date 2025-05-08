@@ -28,7 +28,7 @@ notion_service = NotionService()
 
 class PageRequest(BaseModel):
     db_title: str
-    plans: list[dict]  # 여러 학습 계획 받아서 처리
+    plans: list[dict] # 여러 학습 계획 받아서 처리
 
 class SummaryRequest(BaseModel):
     page_id: str
@@ -125,6 +125,7 @@ async def patch_page(page_id: str, req: PageUpdateRequest):
 async def get_content(page_id: str):
     try:
         data = await notion_service.get_page_content(page_id)
+        print(data)
         blocks = [block_content(b) for b in data["blocks"]]
         return blocks
     except Exception as e:
