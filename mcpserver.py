@@ -74,13 +74,13 @@ EXAMPLE_MAP: dict[str, str] = {
     # DB 생성
     "database_tool.create": (
         "필수: title\n"
-        "{\"payload\":{\"title\":\"학습 제목\"}}"
+        "{\"payload\":{\"title\":\"학습 제목\"}}\n"
     ),
 
     # 페이지 수정
     "page_tool.update": (
-        "필수: page_id, payload[title,date,status,revisit,goal_intro,goals,summary]\n"
-        "{\"payload\":{\"page_id\":\"\",\"title\":\"새 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"진행중\",\"revisit\":true,\"goal_intro\":\"수정된 목표 소개\",\"goals\":[\"새 목표1\",\"새 목표2\"],\"summary\":\"수정된 요약\"}}"
+        "필수: page_id | payload.props[title,date,status,revisit],payload.content[goal_intro,goals],payload.summary[summary]\n"
+        "{\"payload\":{\"page_id\":\"\",\"props\":{\"title\":\"새 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"진행중\",\"revisit\":true},\"content\":{\"goal_intro\":\"수정된 목표 소개\",\"goals\":[\"새 목표1\",\"새 목표2\"]},\"summary\":{\"summary\":\"수정된 요약\"}}"
     ),
 
     # 페이지 생성
@@ -97,11 +97,13 @@ EXAMPLE_MAP: dict[str, str] = {
 
     # DB 페이지 삭제
     "page_tool.delete" : (
-        
+        "params.page_id 파라미터 넣을 시 특정 페이지 삭제"
     ),
 
     # DB 페이지 조회
-    
+    "page_tool.get" : (
+        "params.page_id 파라미터 넣을 시 특정 페이지 조회"
+    ),
 }
 
 ERROR_MSG = {
@@ -113,12 +115,6 @@ ERROR_MSG = {
     429: "429 Too Many Requests",
     500: "500 Internal Server Error",
 }
-
-# 확인 필요 메소드
-CONFIRMATION_REQUIRED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-
-# 대기 중인 작업
-pending_confirmations = {}
 
 #Http Client 싱글톤
 _client: httpx.AsyncClient | None = None
@@ -137,7 +133,7 @@ def _get_payload(group: Group, action: str, params: dict) -> dict | None:
 
     raw_payload = params.get("payload")
     if raw_payload is None:
-        raise ValueError(f"{action} 액션에는 params.payload가 필요합니다.")
+        raise ValueError(f"{action} helper툴을 호출해서 파라미터 형식을 확인")
 
     model_cls = PAYLOAD_MODEL.get((group, action))
     if model_cls is None:
@@ -148,75 +144,20 @@ def _get_payload(group: Group, action: str, params: dict) -> dict | None:
     except ValidationError as ve:
         raise ValueError(f"payload 검증 실패: {ve}") from ve
 
-def _is_confirmation_required(method: str) -> bool:
-    return method in CONFIRMATION_REQUIRED_METHODS
-    
-
-def _get_confirmation_id(group: Group, action: str, params: dict) -> str:
-    """확인 요청을 위한 고유 ID 생성"""
-    key_parts = [group.value, action]
-    
-    # 중요 식별자 추가
-    for key in ["db_id", "page_id"]:
-        if key in params:
-            key_parts.append(params[key])
-    
-    # 제목 정보 추가 (있는 경우)
-    if isinstance(params.get("payload"), dict) and "title" in params["payload"]:
-        key_parts.append(str(params["payload"]["title"]))
-        
-    return f"{'-'.join(key_parts)}"
-
-def _get_confirmation_message(group: Group, action: str, method: str, params: dict, confirmation_id: str) -> str:
-    """사용자 친화적인 확인 메시지 생성"""
-    # 작업 세부 정보 요약
-    changes = []
-    if method == "POST": changes.append("새로운 항목 생성")
-    elif method == "DELETE": changes.append("항목 삭제")
-    elif method in {"PUT", "PATCH"}: changes.append("항목 수정")
-    
-    # 중요 정보 추가
-    for key in ["db_id", "page_id"]:
-        if key in params:
-            changes.append(f"{key}: {params[key]}")
-    
-    # payload가 있으면 제목 정보 추가  
-    if isinstance(params.get("payload"), dict) and "title" in params["payload"]:
-        changes.append(f"제목: {params['payload']['title']}")
-        
-    return f"""
-## 실행 계획
-- 그룹: {group.value}
-- 작업: {action} ({method})
-- 변경사항: {', '.join(changes)}
-
-이 작업을 실행할까요? (예/아니오)
-[확인 코드: {confirmation_id}]
-"""
-
 # 툴 디스패치
 async def dispatch(group: Group, action: str, params: dict) -> str:
     spec = ACTION_MAP[group].get(action)
     if not spec:
         return f"{group.value} 지원되지 않는 action '{action}'"
     
-    method = spec["method"]
-    
-    # 확인이 필요한 메소드인지 확인
-    if _is_confirmation_required(method):
-        confirmation_id = _get_confirmation_id(group, action, params)
-        
-        if pending_confirmations.get(confirmation_id):
-            del pending_confirmations[confirmation_id]
-        else:
-            pending_confirmations[confirmation_id] = False
-            return _get_confirmation_message(group, action, method, params, confirmation_id)
-
-    
     try:
         payload = _get_payload(group, action, params)
     except ValueError as e:
         return str(e)
+    
+    if spec["method"] in ('POST', 'PATCH', 'DELETE', 'PUT'):
+        if not params.get("confirm"):
+            return "사용자 승인 필요, 승인 시 같은 요청에 params.confirm 포함, 취소 시 무시"
 
     path = spec["path"](params)
     url  = f"{STUDYAI_API}/{group.value}{path}"
@@ -256,6 +197,28 @@ def helper(action: str) -> str:
     return examples.get(action, "지원 안 함")
 
 # ───────────────────────초기 가이드 prompt ───────────────────────
+@mcp.prompt(name="Essential Guidelines", description="필수 지침 사항")
+def essential_guidelines() -> list[base.Message]:
+    guide = (
+        "⚠️ 필수 준수 사항 - 반드시 따라야 합니다! ⚠️\n\n"
+        "1. 모든 변경성 액션(create/update/delete)은 반드시:\n"
+        "   - 사용자에게 \"실행할까요? 예/아니오\" 명확히 질문할 것\n"
+        "   - '예'라는 응답을 받은 경우에만 dispatch() 호출\n"
+        "   - '아니오'인 경우 즉시 중단하고 \"취소했습니다\" 메시지 반환\n\n"
+        "2. 시스템 운영 필수 규칙:\n"
+        "   - 툴 호출시 한번에 한 요청만 처리\n"
+        "   - 사용자의 요청이 완전히 끝날 때까지 기다리고 처리\n"
+        "   - 모든 생성 요청은 사용자의 구체적인 요구사항을 정확히 반영\n"
+        "   - 어떤 경우에도 사용자 확인 없이 변경 작업 실행 금지\n\n"
+        "이 지침을 위반할 경우 심각한 데이터 오류가 발생할 수 있으며,\n"
+        "모든 시스템 작업은 위 규칙을 엄격히 준수해야 합니다."
+    )
+    return [
+            base.Message(
+            role="assistant",
+            content=base.TextContent(type="text", text=guide)
+        )
+    ]
 @mcp.prompt(name="Params Guide", description="툴 사용시 파라미터 형식 가이드")
 def guidelines() -> list[base.Message]:
     guide = (
@@ -271,21 +234,6 @@ def guidelines() -> list[base.Message]:
         "- database_tool(list | current | activate | deactivate)\n"
         "- webhook_tool(start | stop | verify | retry)\n"
         "- 툴 호출시 한번에 한 요청만 처리합니다."
-    )
-    return [
-        base.Message(
-            role="user",
-            content=base.TextContent(type="text", text=guide)
-        )
-    ]
-
-@mcp.prompt(name="Base Guide", description="기본 지시사항")
-def base_guide() -> list[base.Message]:
-    guide = (
-        "툴 호출 시 한번에 한 요청만 처리합니다.\n"
-        "사용자의 요청이 끝날 때까지 기다리고 처리합니다.\n"
-        "모든 생성 요청 시 사용자의 요구사항을 반영해야 합니다\n"
-        "반드시 사용자에게 확인 후 처리해야 합니다.\n"
     )
     return [
         base.Message(

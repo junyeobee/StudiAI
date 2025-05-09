@@ -96,7 +96,7 @@ async def create_pages(req: LearningPagesRequest):
 
 @router.patch("/pages/{page_id}")
 async def patch_page(page_id: str, req: PageUpdateRequest):
-
+    print(req)
     payload = jsonable_encoder(req, by_alias=True, exclude_none=True)
     props = payload.get("props")
     content = payload.get("content")
