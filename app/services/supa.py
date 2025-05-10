@@ -1,15 +1,11 @@
 from supabase._async.client import AsyncClient, create_client
-from dotenv import load_dotenv
-import os
 from datetime import datetime
 from app.core.config import settings
 from app.utils.logger import api_logger, webhook_logger
 import httpx
-from fastapi import Depends, Request
+from fastapi import Request
 from typing import Optional
 
-
-load_dotenv()
 
 # 전역 Supabase 클라이언트
 supabase: AsyncClient | None = None
