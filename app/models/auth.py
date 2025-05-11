@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import datetime
+from typing import List, Dict
 
 class RegisterRequest(BaseModel):
     """사용자 등록 요청"""
@@ -27,3 +28,13 @@ class UserIntegrationResponse(BaseModel):
     expires_at: Optional[datetime] = Field(None, description="만료 시간")
     created_at: datetime = Field(..., description="생성 시간")
     updated_at: datetime = Field(..., description="업데이트 시간")
+
+class ApiKeyResponse(BaseModel):
+    key: str
+
+class ApiKeyList(BaseModel):
+    keys: List[Dict]
+
+class MessageResponse(BaseModel):
+    message: str
+    success: bool

@@ -3,28 +3,11 @@ from datetime import datetime
 from app.core.config import settings
 from app.utils.logger import api_logger, webhook_logger
 import httpx
-from fastapi import Request
 from typing import Optional
 
-
-# 전역 Supabase 클라이언트
-supabase: AsyncClient | None = None
-
-async def init_supabase() -> AsyncClient:
-    """Supabase 클라이언트 초기화"""
-    global supabase
-    if supabase is None:
-        supabase = await create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
-    return supabase
-
-async def get_supabase(request: Request) -> AsyncClient:
-    """의존성 주입을 위한 Supabase 클라이언트 제공자"""
-    return request.app.state.supabase
-
-async def insert_learning_database(db_id: str, title: str, parent_page_id: str) -> bool:
+async def insert_learning_database(db_id: str, title: str, parent_page_id: str, supabase: AsyncClient) -> bool:
     """새로운 학습 데이터베이스 등록"""
     try:
-        await init_supabase()
         data = {
             "db_id": db_id,
             "title": title,
@@ -39,10 +22,10 @@ async def insert_learning_database(db_id: str, title: str, parent_page_id: str) 
         api_logger.error(f"데이터베이스 등록 실패: {str(e)}")
         return False
 
-async def get_learning_database_by_title(title: str) -> tuple:
+
+async def get_learning_database_by_title(title: str, supabase: AsyncClient) -> tuple:
     """제목으로 학습 데이터베이스 정보 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases").select("id, db_id").eq("title", title).execute()
         data = res.data
         if data:
@@ -52,25 +35,22 @@ async def get_learning_database_by_title(title: str) -> tuple:
         api_logger.error(f"데이터베이스 조회 실패: {str(e)}")
         return None, None
 
-async def get_active_learning_database() -> dict:
+async def get_active_learning_database(supabase: AsyncClient) -> dict:
     """현재 활성화된 학습 데이터베이스 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases").select("*").eq("status", "used").execute()
         data = res.data
         if data:
-            await update_last_used_date(data[0]["id"])
+            await update_last_used_date(data[0]["id"], supabase)
             return data[0]
         return None
     except Exception as e:
         api_logger.error(f"활성 데이터베이스 조회 실패: {str(e)}")
         return None
 
-async def update_learning_database_status(db_id: Optional[str], status: str) -> dict:
+async def update_learning_database_status(db_id: Optional[str], status: str, supabase: AsyncClient) -> dict:
     """학습 데이터베이스 상태 업데이트"""
     try:
-        await init_supabase()
-
         # 기존 used 상태인 레코드 여부
         resp = await supabase.table("learning_databases") \
             .select("id") \
@@ -105,10 +85,9 @@ async def update_learning_database_status(db_id: Optional[str], status: str) -> 
         api_logger.error(f"DB 상태 업데이트 실패(db_id={db_id}, status={status}): {e}")
         return None
 
-async def update_last_used_date(id: int) -> bool:
+async def update_last_used_date(id: int, supabase: AsyncClient) -> bool:
     """마지막 사용일 업데이트"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases").update({
             "last_used_date": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat()
@@ -118,20 +97,18 @@ async def update_last_used_date(id: int) -> bool:
         api_logger.error(f"마지막 사용일 업데이트 실패: {str(e)}")
         return False
 
-async def get_available_learning_databases() -> list:
+async def get_available_learning_databases(supabase: AsyncClient) -> list:
     """사용 가능한 학습 데이터베이스 목록 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases").select("*").eq("status", "ready").execute()
         return res.data if res and hasattr(res, 'data') else []
     except Exception as e:
         api_logger.error(f"사용 가능한 데이터베이스 조회 실패: {str(e)}")
         return []
 
-async def list_all_learning_databases(status: str = None) -> list:
+async def list_all_learning_databases(supabase: AsyncClient, status: str = None) -> list:
     """모든 학습 데이터베이스 목록 조회"""
     try:
-        await init_supabase()
         query = supabase.table("learning_databases").select("*")
         if status:
             query = query.eq("status", status)
@@ -141,10 +118,9 @@ async def list_all_learning_databases(status: str = None) -> list:
         api_logger.error(f"데이터베이스 목록 조회 실패: {str(e)}")
         return []
 
-async def get_db_info_by_id(db_id: str) -> dict:
+async def get_db_info_by_id(db_id: str, supabase: AsyncClient) -> dict:
     """데이터베이스 ID로 정보 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases").select("*").eq("db_id", db_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
@@ -152,9 +128,8 @@ async def get_db_info_by_id(db_id: str) -> dict:
         return None
 
 # 현재 사용중인 Notion DB ID 조회
-async def get_used_notion_db_id() -> str | None:
+async def get_used_notion_db_id(supabase: AsyncClient) -> str | None:
     """현재 사용중인 Notion DB ID 조회"""
-    await init_supabase()
     res = await supabase.table("learning_databases") \
         .select("db_id") \
         .eq("status", "used") \
@@ -162,10 +137,9 @@ async def get_used_notion_db_id() -> str | None:
         .execute()
     return res.data["db_id"] if res.data else None
 
-async def update_webhook_info(db_id: str, webhook_id: str, status: str = "active") -> dict:
+async def update_webhook_info(db_id: str, webhook_id: str, supabase: AsyncClient, status: str = "active") -> dict:
     """웹훅 정보 업데이트"""
     try:
-        await init_supabase()
         update_data = {
             "webhook_id": webhook_id,
             "webhook_status": status,
@@ -181,30 +155,27 @@ async def update_webhook_info(db_id: str, webhook_id: str, status: str = "active
         api_logger.error(f"웹훅 정보 업데이트 실패: {str(e)}")
         return None
 
-async def get_webhook_info(db_id: str) -> dict:
+async def get_webhook_info(db_id: str, supabase: AsyncClient) -> dict:
     """웹훅 정보 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases").select("webhook_id, webhook_status").eq("db_id", db_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"웹훅 정보 조회 실패: {str(e)}")
         return None
 
-async def get_webhook_info_by_db_id(db_id: str) -> dict:
+async def get_webhook_info_by_db_id(db_id: str, supabase: AsyncClient) -> dict:
     """DB ID로 웹훅 정보를 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases").select("webhook_id, webhook_status").eq("db_id", db_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"웹훅 정보 조회 실패: {str(e)}")
         return None
 
-async def log_webhook_operation(db_id: str, operation_type: str, status: str, error_message: str = None, webhook_id: str = None) -> bool:
+async def log_webhook_operation(db_id: str, operation_type: str, status: str, supabase: AsyncClient, error_message: str = None, webhook_id: str = None) -> bool:
     """웹훅 작업 로그 기록"""
     try:
-        await init_supabase()
         data = {
             "db_id": db_id,
             "operation_type": operation_type,
@@ -219,10 +190,9 @@ async def log_webhook_operation(db_id: str, operation_type: str, status: str, er
         api_logger.error(f"웹훅 작업 로그 기록 실패: {str(e)}")
         return False
 
-async def insert_learning_page(date: str, title: str, page_id: str, ai_block_id: str, learning_db_id: str) -> bool:
+async def insert_learning_page(date: str, title: str, page_id: str, ai_block_id: str, learning_db_id: str, supabase: AsyncClient) -> bool:
     """학습 페이지 저장"""
     try:
-        await init_supabase()
         data = {
             "date": date,
             "title": title,
@@ -236,30 +206,27 @@ async def insert_learning_page(date: str, title: str, page_id: str, ai_block_id:
         api_logger.error(f"학습 페이지 저장 실패: {str(e)}")
         return False
 
-async def get_learning_page_by_date(date: str) -> dict:
+async def get_learning_page_by_date(date: str, supabase: AsyncClient) -> dict:
     """날짜별 학습 페이지 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_pages").select("*").eq("date", date).execute()
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"학습 페이지 조회 실패: {str(e)}")
         return None
 
-async def update_ai_block_id(page_id: str, new_ai_block_id: str) -> bool:
+async def update_ai_block_id(page_id: str, new_ai_block_id: str, supabase: AsyncClient) -> bool:
     """AI 블록 ID 업데이트"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_pages").update({"ai_block_id": new_ai_block_id}).eq("page_id", page_id).execute()
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"AI 블록 ID 업데이트 실패: {str(e)}")
         return False
 
-async def get_ai_block_id_by_page_id(page_id: str) -> str:
+async def get_ai_block_id_by_page_id(page_id: str, supabase: AsyncClient) -> str:
     """페이지 ID로 AI 블록 ID 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_pages").select("ai_block_id").eq("page_id", page_id).execute()
         data = res.data
         if data and "ai_block_id" in data[0]:
@@ -269,10 +236,9 @@ async def get_ai_block_id_by_page_id(page_id: str) -> str:
         api_logger.error(f"AI 블록 ID 조회 실패: {str(e)}")
         return None
 
-async def get_failed_webhook_operations(limit: int = 10) -> list:
+async def get_failed_webhook_operations(supabase: AsyncClient, limit: int = 10) -> list:
     """실패한 웹훅 작업 조회"""
     try:
-        await init_supabase()
         res = await supabase.table("webhook_operations")\
             .select("*")\
             .eq("status", "failed")\
@@ -285,10 +251,9 @@ async def get_failed_webhook_operations(limit: int = 10) -> list:
         api_logger.error(f"실패한 웹훅 작업 조회 실패: {str(e)}")
         return []
 
-async def update_webhook_operation_status(operation_id: int, status: str, error_message: str = None) -> bool:
+async def update_webhook_operation_status(operation_id: int, status: str, supabase: AsyncClient, error_message: str = None) -> bool:
     """웹훅 작업 상태 업데이트"""
     try:
-        await init_supabase()
         update_data = {
             "status": status,
             "updated_at": datetime.now().isoformat()
@@ -316,10 +281,9 @@ async def update_webhook_operation_status(operation_id: int, status: str, error_
         api_logger.error(f"웹훅 작업 상태 업데이트 실패: {str(e)}")
         return False
 
-async def verify_all_webhooks() -> dict:
+async def verify_all_webhooks(supabase: AsyncClient) -> dict:
     """모든 활성 웹훅의 상태를 검증"""
     try:
-        await init_supabase()
         res = await supabase.table("learning_databases")\
             .select("*")\
             .eq("webhook_status", "active")\
@@ -387,10 +351,9 @@ async def verify_all_webhooks() -> dict:
             "errors": [str(e)]
         }
 
-async def retry_failed_webhook_operations() -> dict:
+async def retry_failed_webhook_operations(supabase: AsyncClient) -> dict:
     """실패한 웹훅 작업을 재시도"""
     try:
-        await init_supabase()
         res = await supabase.table("webhook_operations")\
             .select("*")\
             .eq("status", "failed")\
@@ -485,7 +448,7 @@ async def retry_failed_webhook_operations() -> dict:
             "errors": [str(e)]
         }
 
-async def get_databases_in_page(page_id: str) -> list:
+async def get_databases_in_page(page_id: str, supabase: AsyncClient) -> list:
     """특정 Notion 페이지 내의 모든 데이터베이스를 조회"""
     try:
         url = f"https://api.notion.com/v1/blocks/{page_id}/children"
@@ -522,10 +485,10 @@ async def get_databases_in_page(page_id: str) -> list:
         api_logger.error(f"Error fetching databases: {str(e)}")
         return []
 
-async def activate_database(db_id: str) -> bool:
+async def activate_database(db_id: str, supabase: AsyncClient) -> bool:
     """데이터베이스를 활성화"""
     try:
-        active_db = await get_active_learning_database()
+        active_db = await get_active_learning_database(supabase)
         if active_db:
             await update_learning_database_status(active_db['db_id'], 'ready')
         
@@ -535,7 +498,7 @@ async def activate_database(db_id: str) -> bool:
         api_logger.error(f"Error activating database: {str(e)}")
         return False
 
-async def deactivate_database(db_id: str, end_status: bool = False) -> bool:
+async def deactivate_database(db_id: str, supabase: AsyncClient, end_status: bool = False) -> bool:
     """데이터베이스를 비활성화"""
     try:
         new_status = 'end' if end_status else 'ready'
@@ -545,10 +508,9 @@ async def deactivate_database(db_id: str, end_status: bool = False) -> bool:
         api_logger.error(f"Error deactivating database: {str(e)}")
         return False
 
-async def update_learning_database(db_id: str, update_data: dict) -> dict:
+async def update_learning_database(db_id: str, update_data: dict, supabase: AsyncClient) -> dict:
     """학습 DB 정보 업데이트"""
     try:
-        await init_supabase()
         update_data["updated_at"] = datetime.now().isoformat()
         res = await supabase.table("learning_databases").update(update_data).eq("db_id", db_id).execute()
         return res.data[0] if res.data else None
@@ -556,13 +518,19 @@ async def update_learning_database(db_id: str, update_data: dict) -> dict:
         api_logger.error(f"DB 업데이트 실패: {str(e)}")
         return None
     
-
-async def delete_learning_page(page_id: str) -> None:
+async def delete_learning_page(page_id: str, supabase: AsyncClient) -> None:
     """학습 페이지 삭제"""
     try : 
-        await init_supabase()
         await supabase.table("learning_pages").delete().eq("page_id", page_id).execute()
     except Exception as e:
         api_logger.error(f"학습 페이지 메타 삭제 실패: {str(e)}")
         return None
 
+async def auth_user(user_id:str, auth_token:str, supabase: AsyncClient) -> dict:
+    """유저 인증"""
+    try:
+        res = await supabase.auth.admin.getUserById(user_id)
+        return res.data
+    except Exception as e:
+        api_logger.error(f"유저 인증 실패: {str(e)}")
+        return None

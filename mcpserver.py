@@ -4,7 +4,7 @@ from strenum import StrEnum
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.prompts import base
 from pydantic import ValidationError
-
+#나중에 모델 -> dict로 변경할거임(배포용은 프로젝트 구조 없어서 모델 사용 불가)
 from app.models.learning import LearningPagesRequest, PageUpdateRequest
 from app.models.database import DatabaseCreate, DatabaseUpdate
 

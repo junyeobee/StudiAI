@@ -9,12 +9,6 @@ import os
 # .env 파일 로드
 load_dotenv()
 
-# 디버그: 환경 변수 확인
-print("NOTION_API_KEY:", os.getenv("NOTION_API_KEY"))
-print("NOTION_PARENT_PAGE_ID:", os.getenv("NOTION_PARENT_PAGE_ID"))
-print("SUPABASE_URL:", os.getenv("SUPABASE_URL"))
-print("SUPABASE_KEY:", os.getenv("SUPABASE_KEY"))
-
 class Settings(BaseSettings):
     # 프로젝트 정보
     PROJECT_NAME: str = "Notion Learning API"

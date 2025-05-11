@@ -6,14 +6,9 @@ from typing import Callable, Any, Type
 from functools import wraps
 from app.utils.logger import api_logger
 
-def async_retry(
-    max_retries: int = 3,
-    delay: float = 1.0,
-    backoff: float = 2.0,
-    exceptions: tuple[Type[Exception], ...] = (Exception,)
-) -> Callable:
+def async_retry(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0, exceptions: tuple[Type[Exception], ...] = (Exception,)) -> Callable:
     """
-    비동기 함수에 대한 재시도 데코레이터
+    API 요청 재시도 데코레이터
     
     Args:
         max_retries: 최대 재시도 횟수

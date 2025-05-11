@@ -3,7 +3,6 @@
 """
 from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
-from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from app.services.notion_service import NotionService
 from app.models.learning import (
@@ -16,12 +15,14 @@ from app.services.supa import (
     get_ai_block_id_by_page_id,
     delete_learning_page
 )
-from app.core.exceptions import DatabaseError
 from app.utils.logger import api_logger
 from app.utils.notion_utils import(
     block_content,
     serialize_page_props
 )
+from app.core.supabase_connect import get_supabase
+from supabase._async.client import AsyncClient
+from fastapi import Depends
 
 router = APIRouter()
 notion_service = NotionService()
@@ -35,7 +36,7 @@ class SummaryRequest(BaseModel):
     summary: str
 
 @router.get("/pages")
-async def list_learning_pages(current: bool = False,db_id: str | None = None):
+async def list_learning_pages(current: bool = False,db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase)):
     """
     학습 페이지 목록 조회
     - current=true : 현재 used DB 기준
@@ -46,7 +47,7 @@ async def list_learning_pages(current: bool = False,db_id: str | None = None):
         target_db_id = db_id
         if not target_db_id:
             if current:
-                target_db_id = await get_used_notion_db_id()
+                target_db_id = await get_used_notion_db_id(supabase)
             else:
                 raise HTTPException(400, "db_id 또는 current=true 중 하나는 필수입니다.")
 
@@ -66,7 +67,7 @@ async def list_learning_pages(current: bool = False,db_id: str | None = None):
         raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
-async def create_pages(req: LearningPagesRequest):
+async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depends(get_supabase)):
     notion_db_id = req.notion_db_id
     results = []
 
@@ -81,7 +82,8 @@ async def create_pages(req: LearningPagesRequest):
                 title=plan.title,
                 page_id=page_id,
                 ai_block_id=ai_block_id,
-                learning_db_id=notion_db_id
+                learning_db_id=notion_db_id,
+                supabase=supabase
             )
 
             results.append({"page_id": page_id, "ai_block_id": ai_block_id, "saved": saved})
@@ -95,7 +97,7 @@ async def create_pages(req: LearningPagesRequest):
     }
 
 @router.patch("/pages/{page_id}")
-async def patch_page(page_id: str, req: PageUpdateRequest):
+async def patch_page(page_id: str, req: PageUpdateRequest, supabase: AsyncClient = Depends(get_supabase)):
     print(req)
     payload = jsonable_encoder(req, by_alias=True, exclude_none=True)
     props = payload.get("props")
@@ -103,7 +105,7 @@ async def patch_page(page_id: str, req: PageUpdateRequest):
     summary = payload.get("summary").get("summary") if payload.get("summary") else None
     
     if summary is not None:
-        ai_block_id = await get_ai_block_id_by_page_id(page_id)
+        ai_block_id = await get_ai_block_id_by_page_id(page_id, supabase)
     else:
         ai_block_id = None
     
@@ -135,10 +137,10 @@ async def get_content(page_id: str):
 
 # 페이지 삭제
 @router.delete("/pages/{page_id}")
-async def delete_page(page_id: str):
+async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase)):
     try:
         await notion_service.delete_page(page_id)
-        await delete_learning_page(page_id)
+        await delete_learning_page(page_id, supabase)
         return {"status": "deleted", "page_id": page_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

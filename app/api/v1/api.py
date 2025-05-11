@@ -2,10 +2,10 @@
 API 라우터 통합
 """
 from fastapi import APIRouter
-from app.api.v1.endpoints import databases, webhooks, learning
+from app.api.v1.endpoints import databases, webhooks, learning, auth
 
 api_router = APIRouter()
-
+public_router = APIRouter()
 # 데이터베이스 관련 엔드포인트
 api_router.include_router(
     databases.router,
@@ -25,4 +25,17 @@ api_router.include_router(
     learning.router,
     prefix="/learning",
     tags=["learning"]
+)
+
+# 인증 관련 엔드포인트
+api_router.include_router(
+    auth.router,
+    prefix="/auth",
+    tags=["auth"]
 ) 
+
+public_router.include_router(
+    auth.public_router,
+    prefix="/auth_public",
+    tags=["auth_public"]
+)
