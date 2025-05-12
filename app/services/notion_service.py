@@ -1,7 +1,6 @@
 """
 Notion API 연동 서비스
 """
-import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 import httpx
@@ -208,7 +207,7 @@ class NotionService:
         blocks.append({"object":"block","type":"divider","divider":{}})
 
         # AI블록
-        blocks.extend([
+        blocks.extend([ 
             {
                 "object":"block","type":"heading_2",
                 "heading_2":{"rich_text":[{"type":"text","text":{"content":"🤖 AI 요약 내용"}}]}
@@ -383,7 +382,6 @@ class NotionService:
         """
         # 1. 속성 업데이트
         if props:
-            print(1)
             await self.update_page_properties(page_id, props)
 
         # 2. 목표 섹션

@@ -1,6 +1,8 @@
 from app.utils.logger import api_logger
 from supabase._async.client import AsyncClient
 from datetime import datetime
+from typing import List, Dict
+from app.core.exceptions import DatabaseError
 
 async def get_user_by_key_hash(hashed_key: str, supabase: AsyncClient):
     """해시된 API 키로 유저 조회"""
@@ -54,3 +56,16 @@ async def delete_user_api_key(key_id: str, user_id: str, supabase: AsyncClient):
     except Exception as e:
         api_logger.error(f"API 키 비활성화 실패: {str(e)}")
         return None
+    
+async def get_integrations_by_user_id(user_id:str, supabase:AsyncClient) -> List[Dict]:
+    """
+    사용자의 모든 통합 정보 조회
+    """
+    try:
+        res = await supabase.table("user_integrations")\
+            .select("*").eq("user_id", user_id).execute()
+        return res.data
+    except Exception as e:
+        api_logger.error(f"사용자 통합 정보 조회 실패: {str(e)}")
+        return DatabaseError(e)
+    

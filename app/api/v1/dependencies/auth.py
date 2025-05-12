@@ -15,7 +15,6 @@ async def require_user(request: Request, supabase: AsyncClient = Depends(get_sup
         res = await verify_api_key(api_key, supabase)
         if not res:
             raise HTTPException(status_code=403, detail="유효하지 않은 토큰")
-
         return res
     except Exception as e:
         raise HTTPException(status_code=403, detail=f"토큰 검증 실패: {str(e)}")

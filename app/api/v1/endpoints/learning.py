@@ -3,7 +3,6 @@
 """
 from fastapi import APIRouter, HTTPException
 from fastapi.encoders import jsonable_encoder
-from pydantic import BaseModel
 from app.services.notion_service import NotionService
 from app.models.learning import (
     LearningPagesRequest,
@@ -23,17 +22,11 @@ from app.utils.notion_utils import(
 from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
 from fastapi import Depends
+from app.api.v1.dependencies.auth import require_user
+from app.utils.logger import api_logger
 
 router = APIRouter()
 notion_service = NotionService()
-
-class PageRequest(BaseModel):
-    db_title: str
-    plans: list[dict] # 여러 학습 계획 받아서 처리
-
-class SummaryRequest(BaseModel):
-    page_id: str
-    summary: str
 
 @router.get("/pages")
 async def list_learning_pages(current: bool = False,db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase)):
@@ -49,9 +42,11 @@ async def list_learning_pages(current: bool = False,db_id: str | None = None, su
             if current:
                 target_db_id = await get_used_notion_db_id(supabase)
             else:
+                api_logger.error("학습 페이지 목록 조회 실패: db_id 또는 current=true 중 하나는 필수입니다.")
                 raise HTTPException(400, "db_id 또는 current=true 중 하나는 필수입니다.")
 
         if not target_db_id:
+            api_logger.error("학습 페이지 목록 조회 실패: 활성화된 학습 DB가 없습니다.")
             raise HTTPException(404, "활성화된 학습 DB가 없습니다.")
 
         pages = await notion_service.list_all_pages(target_db_id)
@@ -64,6 +59,7 @@ async def list_learning_pages(current: bool = False,db_id: str | None = None, su
     except HTTPException:
         raise
     except Exception as e:
+        api_logger.error(f"학습 페이지 목록 조회 실패: {str(e)}")
         raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
@@ -88,6 +84,7 @@ async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depend
 
             results.append({"page_id": page_id, "ai_block_id": ai_block_id, "saved": saved})
         except Exception as e:
+            api_logger.error(f"학습 페이지 생성 실패: {str(e)}")
             results.append({"error": str(e), "plan": plan.model_dump()})
 
     return {
@@ -111,16 +108,20 @@ async def patch_page(page_id: str, req: PageUpdateRequest, supabase: AsyncClient
     
     if props is not None:
         props = serialize_page_props(props)
+    try:
+        await notion_service.update_learning_page_comprehensive(
+            ai_block_id,
+            page_id,
+            props=props if props else None,
+            goal_intro=content.get("goal_intro") if content else None,
+            goals=content.get("goals") if content else None,
+            summary=summary
+        )
+        return {"status":"success", "page_id": page_id}
+    except Exception as e:
+        api_logger.error(f"학습 페이지 업데이트 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
-    await notion_service.update_learning_page_comprehensive(
-        ai_block_id,
-        page_id,
-        props=props if props else None,
-        goal_intro=content.get("goal_intro") if content else None,
-        goals=content.get("goals") if content else None,
-        summary=summary
-    )
-    return {"status":"success", "page_id": page_id}
 
 
 # 완료
@@ -132,6 +133,7 @@ async def get_content(page_id: str):
         blocks = [block_content(b) for b in data["blocks"]]
         return blocks
     except Exception as e:
+        api_logger.error(f"학습 페이지 콘텐츠 조회 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
 
@@ -143,4 +145,5 @@ async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase
         await delete_learning_page(page_id, supabase)
         return {"status": "deleted", "page_id": page_id}
     except Exception as e:
+        api_logger.error(f"학습 페이지 삭제 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
