@@ -11,6 +11,9 @@ from app.services.auth_service import (
     revoke_api_key
 )
 from app.models.auth import ApiKeyResponse, ApiKeyList, MessageResponse
+from app.models.auth import UserIntegrationRequest, UserIntegrationResponse
+from app.services.auth_service import encrypt_token, get_integration_token
+from app.api.v1.dependencies.auth import require_user
 
 router = APIRouter()
 public_router = APIRouter()
@@ -72,3 +75,33 @@ async def delete_api_key(
         message="API 키가 성공적으로 비활성화되었습니다",
         success=True
     ) 
+
+@router.post("/integrations", response_model=UserIntegrationResponse)
+async def create_integration(request: UserIntegrationRequest, user_id: str = Depends(require_user),supabase: AsyncClient = Depends(get_supabase)):
+    """
+    새로운 통합 생성
+    """
+    try:
+        return await encrypt_token(user_id,request, supabase)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+
+@router.get("/integrations/{provider}")
+async def get_integration(provider: str, user_id: str = Depends(require_user),supabase: AsyncClient = Depends(get_supabase)):
+    """
+    통합 정보 조회
+    """
+    try:
+        return await get_integration_token(user_id, provider, supabase)
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=str(e)
+        )
+    
+
+    
+

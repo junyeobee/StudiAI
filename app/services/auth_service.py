@@ -10,14 +10,15 @@ from app.services.supa_auth_service import (
     get_user_by_key_hash, 
     get_user_api_keys, 
     delete_user_api_key,
-    get_integrations_by_user_id
+    get_integrations_by_user_id,
+    get_integration_by_id,
+    save_integration_token
 )
 import base64
-from app.models.auth import UserIntegrationRequest, UserIntegrationResponse
+from app.models.auth import UserIntegrationRequest, UserIntegrationResponse, UserIntegration
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
-from app.config import settings
-
+from app.core.config import settings
 
 async def generate_api_key(user_id: str, supabase: AsyncClient) -> str:
     """
@@ -129,101 +130,70 @@ async def get_user_integrations(user_id:str, supabase:AsyncClient) -> List[Dict]
     사용자의 모든 통합 정보 조회
     """
     try:
-        res = await get_integrations_by_user_id(user_id, supabase)
-        return res.data
+        return await get_integrations_by_user_id(user_id, supabase)
     except Exception as e:
         api_logger.error(f"사용자 통합 정보 조회 실패: {str(e)}")
-        return e
+        raise e
     
-async def save_integration_token(request: UserIntegrationRequest,supabase: AsyncClient) -> UserIntegrationResponse:
+async def encrypt_token(user_id:str,request: UserIntegrationRequest,supabase: AsyncClient) -> UserIntegrationResponse:
     """
     AES 암호화 키를 사용하여 통합 토큰을 암호화 후 저장
     """
     try:
-        # AES 암호화 키 (bytes로 변환)
         encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
-        
-        # 토큰 암호화
-        # 1. 랜덤 IV 생성 (16 bytes)
         iv = get_random_bytes(16)
-        
-        # 2. AES-GCM 암호화 객체 생성
         cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
-        
-        # 3. access_token 암호화
         encrypted_access_token, tag_a = cipher.encrypt_and_digest(request.access_token.encode('utf-8'))
-        # 암호화된 토큰과 태그를 합쳐 저장 (base64로 인코딩)
         token_store_value = base64.b64encode(encrypted_access_token + tag_a).decode('utf-8')
-        
-        # 4. refresh_token이 있는 경우 함께 암호화
         encrypted_refresh_token = None
         if request.refresh_token:
-            # 새 암호화 객체 생성 (동일 IV 사용)
             cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
             encrypted_rt, tag_r = cipher.encrypt_and_digest(request.refresh_token.encode('utf-8'))
             encrypted_refresh_token = base64.b64encode(encrypted_rt + tag_r).decode('utf-8')
             
-        # 5. IV를 base64로 인코딩
         iv_b64 = base64.b64encode(iv).decode('utf-8')
         
-        # 만료시간 계산
         expires_at = None
         if request.expires_in:
             expires_at = datetime.now() + timedelta(seconds=request.expires_in)
-        
-        # 기존 통합이 있는지 확인
-        query = supabase.table("user_integrations") \
-            .select("id") \
-            .eq("user_id", request.user_id) \
-            .eq("provider", request.provider)
-        
-        existing = await query.execute()
-        
-        # 데이터 준비
+        existing_data = None
+        if request.id:
+            try:
+                existing_data = await get_integration_by_id(request.id, supabase)
+            except Exception as e:
+                api_logger.error(f"기존 통합 정보 조회 실패: {str(e)}")
+
         integration_data = {
-            "user_id": request.user_id,
+            "user_id": user_id,
             "provider": request.provider,
             "access_token": token_store_value,
             "refresh_token": encrypted_refresh_token,
             "scopes": request.scopes,
             "expires_at": expires_at.isoformat() if expires_at else None,
-            "token_iv": iv_b64,  # IV 저장
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now().isoformat(),
+            "token_iv": iv_b64
         }
         
-        # DB 저장
-        if existing.data and len(existing.data) > 0:
-            res = await supabase.table("user_integrations") \
-                .update(integration_data) \
-                .eq("id", existing.data[0]["id"]) \
-                .execute()
+        if existing_data:
+            integration_data["id"] = existing_data["id"]
+            print(f'existing_data["created_at"]: {existing_data["created_at"]}')
+            integration_data["created_at"] = existing_data["created_at"]
         else:
             integration_data["created_at"] = datetime.now().isoformat()
-            res = await supabase.table("user_integrations") \
-                .insert(integration_data) \
-                .execute()
         
-        if not res.data:
-            raise Exception("통합 정보 저장 결과가 없습니다.")
-        
-        # 응답 모델로 변환
-        result = res.data[0]
-        return UserIntegrationResponse(
-            id=result["id"],
-            provider=result["provider"],
-            user_id=result["user_id"],
-            scopes=result["scopes"],
-            expires_at=datetime.fromisoformat(result["expires_at"]) if result.get("expires_at") else None,
-            created_at=datetime.fromisoformat(result["created_at"]),
-            updated_at=datetime.fromisoformat(result["updated_at"])
-        )
+        integration_request = UserIntegration(**integration_data)
+
+        return await save_integration_token(integration_request, supabase)
             
+    except ValueError as e:
+        api_logger.error(f"통합 정보 입력값 오류: {str(e)}")
+        raise ValueError(f"통합 정보 처리 오류: {str(e)}")
     except Exception as e:
-        api_logger.error(f"통합 정보 저장 실패: {str(e)}")
+        api_logger.error(f"통합 정보 암호화 실패: {str(e)}")
         raise e
 
 
-async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient) -> Optional[str]:
+async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient) -> str:
     """
     저장된 통합 토큰을 복호화하여 가져옴
     
@@ -237,34 +207,28 @@ async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient
     """
     try:
         # DB에서 암호화된 토큰과 IV 조회
-        res = await supabase.table("user_integrations") \
-            .select("access_token, token_iv") \
-            .eq("user_id", user_id) \
-            .eq("provider", provider) \
-            .single() \
-            .execute()
-            
-        if not res.data:
-            return None
-        
+        res = await get_integration_by_id(user_id, provider, supabase)   
+        if not res:
+            raise Exception("통합 정보 조회 실패")
+        print(f'res: {res}')
         # 암호화 키와 저장된 IV 가져오기
         encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
-        iv = base64.b64decode(res.data["token_iv"])
+        iv = base64.b64decode(res["token_iv"])
         
         # 암호화된 토큰 및 태그 디코딩
-        token_data = base64.b64decode(res.data["access_token"])
-        encrypted_token = token_data[:-16]  # 뒤 16바이트는 GCM 태그
-        tag = token_data[-16:]  # GCM 태그
+        token_data = base64.b64decode(res["access_token"])
+        encrypted_token = token_data[:-16]
+        tag = token_data[-16:]
         
         # 복호화
         cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
-        decrypted_token = cipher.decrypt_and_verify(encrypted_token, tag)
-        
-        return decrypted_token.decode('utf-8')
+        decrypted_token = cipher.decrypt_and_verify(encrypted_token, tag).decode('utf-8')
+        print(f'decrypted_token: {decrypted_token}')
+        return decrypted_token
         
     except Exception as e:
         api_logger.error(f"토큰 복호화 실패: {str(e)}")
-        return None
+        raise e
 
 async def verify_integration_token(user_id: str,provider: str,token_to_verify: str,supabase: AsyncClient) -> bool:
     """
@@ -281,25 +245,24 @@ async def verify_integration_token(user_id: str,provider: str,token_to_verify: s
     """
     try:
         # 저장된 토큰 정보 조회
-        res = await supabase.table("user_integrations") \
-            .select("access_token, salt") \
-            .eq("user_id", user_id) \
-            .eq("provider", provider) \
-            .single() \
-            .execute()
+        res = await get_integration_by_id(user_id, provider, supabase)
             
-        if not res.data:
+        if not res:
             return False
         
-        # 저장된 정보에서 해시된 토큰과 솔트 추출
-        stored_hashed_token = res.data["access_token"]
-        salt = res.data["salt"]
+        # 저장된 정보에서 해시된 토큰 복호화
+        token_data = base64.b64decode(res["access_token"])
+        encrypted_token = token_data[:-16]
+        tag = token_data[-16:]
+        encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
+        iv = base64.b64decode(res["token_iv"])
+        # 복호화
+        cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
+        decrypted_token = cipher.decrypt_and_verify(encrypted_token, tag).decode('utf-8')
         
-        # 검증할 토큰을 동일한 방식으로 해싱
-        hashed_token_to_verify = hashlib.sha256(f"{salt}:{token_to_verify}".encode()).hexdigest()
         
         # 해시값 비교
-        return hashed_token_to_verify == stored_hashed_token
+        return decrypted_token == token_to_verify
         
     except Exception as e:
         api_logger.error(f"토큰 검증 실패: {str(e)}")

@@ -7,8 +7,7 @@ from dotenv import load_dotenv
 import os
 
 # .env 파일 로드
-load_dotenv()
-
+load_dotenv("app/core/.env")
 class Settings(BaseSettings):
     # 프로젝트 정보
     PROJECT_NAME: str = "Notion Learning API"
@@ -36,8 +35,9 @@ class Settings(BaseSettings):
     
     # 보안 설정
     SECRET_KEY: str
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
+    ENCRYPTION_KEY: str
+
     # 로깅 설정
     LOG_LEVEL: str = "DEBUG"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
