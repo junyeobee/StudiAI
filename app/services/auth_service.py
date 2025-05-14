@@ -156,30 +156,19 @@ async def encrypt_token(user_id:str,request: UserIntegrationRequest,supabase: As
         expires_at = None
         if request.expires_in:
             expires_at = datetime.now() + timedelta(seconds=request.expires_in)
-        existing_data = None
-        if request.id:
-            try:
-                existing_data = await get_integration_by_id(request.id, supabase)
-            except Exception as e:
-                api_logger.error(f"기존 통합 정보 조회 실패: {str(e)}")
 
         integration_data = {
+            "id": request.id if request.id else None,
             "user_id": user_id,
             "provider": request.provider,
             "access_token": token_store_value,
             "refresh_token": encrypted_refresh_token,
             "scopes": request.scopes,
+            "created_at": request.created_at if request.created_at else datetime.now().isoformat(),
             "expires_at": expires_at.isoformat() if expires_at else None,
             "updated_at": datetime.now().isoformat(),
             "token_iv": iv_b64
         }
-        
-        if existing_data:
-            integration_data["id"] = existing_data["id"]
-            print(f'existing_data["created_at"]: {existing_data["created_at"]}')
-            integration_data["created_at"] = existing_data["created_at"]
-        else:
-            integration_data["created_at"] = datetime.now().isoformat()
         
         integration_request = UserIntegration(**integration_data)
 

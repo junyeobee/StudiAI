@@ -2,7 +2,7 @@
 사용자 인증 및 API 키 관리 엔드포인트
 """
 from fastapi import APIRouter, Depends, HTTPException
-from typing import List, Dict
+from typing import List, Dict, Optional
 from supabase._async.client import AsyncClient
 from app.core.supabase_connect import get_supabase
 from app.services.auth_service import (
@@ -12,11 +12,22 @@ from app.services.auth_service import (
 )
 from app.models.auth import ApiKeyResponse, ApiKeyList, MessageResponse
 from app.models.auth import UserIntegrationRequest, UserIntegrationResponse
-from app.services.auth_service import encrypt_token, get_integration_token
+from app.services.auth_service import encrypt_token, get_integration_token, get_integration_by_id
 from app.api.v1.dependencies.auth import require_user
+from fastapi import Query
+from app.services.notion_service import NotionService
+from app.core.config import settings
+from fastapi.responses import RedirectResponse, HTMLResponse
+from urllib.parse import urlencode
 
 router = APIRouter()
 public_router = APIRouter()
+
+# 임시 저장소 (실제로는 Redis 사용 예정)
+temp_state_store = {
+    "user_id": "ㅁㄴㅇㄹ",
+    "uuid": "fixed-state-uuid-12345"
+}
 
 @public_router.post("/keys", response_model=ApiKeyResponse)
 async def create_api_key(
@@ -102,6 +113,99 @@ async def get_integration(provider: str, user_id: str = Depends(require_user),su
             detail=str(e)
         )
     
+@router.get("/oauth/{provider}")
+async def initiate_oauth(provider: str, user_id: str = Depends(require_user)):
+    """
+    OAuth 인증 시작
+    """
+    try:
+        # 고정된 state 값 사용 (실제로는 UUID 사용 예정)
+        state_uuid = "fixed-state-uuid-12345"
+        
+        # state 파라미터 생성 (검증용)
+        state_param = f"user_id={user_id}|uuid={state_uuid}"
+        
+        # 리다이렉트 URL 생성
+        if provider == "notion":
+            redirect_uri = "http://localhost:8000/auth_public/callback/notion"
+            notion_auth_url = f"https://api.notion.com/v1/oauth/authorize?client_id={settings.NOTION_CLIENT_ID}&redirect_uri={redirect_uri}&response_type=code&state={state_param}"
+            return {"auth_url": notion_auth_url}
+        else:
+            raise HTTPException(status_code=400, detail=f"지원하지 않는 제공자: {provider}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
-    
+@public_router.get("/callback/{provider}")
+async def token_callback_get(
+    provider: str,
+    code: str = Query(...),
+    state: str = Query(None),
+    supabase: AsyncClient = Depends(get_supabase)
+):
+    """
+    OAuth 콜백 처리: 코드 교환, 토큰 저장까지 한번에 처리
+    """
+    try:
+        # state 파싱
+        user_id = None
+        state_uuid = None
+        if state:
+            state_parts = state.split("|")
+            for part in state_parts:
+                match part:
+                    case p if p.startswith("user_id="):
+                        user_id = p.split("user_id=")[1]
+                        print(user_id)
+                    case p if p.startswith("uuid="):
+                        state_uuid = p.split("uuid=")[1]
+                        print(state_uuid)
+        if not user_id or not state_uuid:
+            raise HTTPException(status_code=401, detail="인증 정보 없음")
+        
+        # UUID 검증 (임시 저장소에서 확인)
+        stored_uuid = temp_state_store.get("uuid")
+        print(stored_uuid)
+        if not stored_uuid or stored_uuid != state_uuid:
+            raise HTTPException(status_code=401, detail="인증 토큰 검증 실패")
+            
+        integration_data = await get_integration_by_id(user_id, provider, supabase)
 
+        # provider에 따라 토큰 교환
+        match provider:
+            case "notion":
+                # 1. NotionService 인스턴스화하여 토큰 교환
+                notion_service = NotionService()
+                token_data = await notion_service.exchange_code_for_token(code)
+                print(f'token_data: {token_data}')
+                if integration_data:
+                    token_request = UserIntegrationRequest(
+                        id=integration_data["id"],
+                        user_id=user_id,
+                        provider=provider,
+                        access_token=token_data["access_token"],
+                        refresh_token=token_data.get("refresh_token"),
+                        expires_in=token_data.get("expires_in"),
+                        scopes=token_data.get("scope", "").split() if token_data.get("scope") else None
+                    )
+                    # 2. 토큰 요청 모델 생성
+                else:
+                    token_request = UserIntegrationRequest(
+                        user_id=user_id,
+                        provider=provider,
+                        access_token=token_data["access_token"],
+                        refresh_token=token_data.get("refresh_token"),
+                        expires_in=token_data.get("expires_in"),
+                        scopes=token_data.get("scope", "").split() if token_data.get("scope") else None
+                    )
+
+                # 3. 토큰 암호화 및 저장
+                result = await encrypt_token(user_id, token_request, supabase)
+                
+                # 4. 성공 응답 반환
+                return {"message": "노션 토큰 설정 완료, AI AGENT로 돌아가주세요.", "provider": provider, "integration_id": result["id"] if isinstance(result, dict) and "id" in result else None}
+            case "github":
+                return {"message": "깃허브 토큰 설정 완료, AI AGENT로 돌아가주세요.", "provider": provider, "integration_id": result["id"] if isinstance(result, dict) and "id" in result else None}
+            case _:
+                raise HTTPException(status_code=400, detail=f"지원하지 않는 제공자: {provider}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

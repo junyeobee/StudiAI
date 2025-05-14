@@ -72,7 +72,7 @@ async def get_integrations_by_user_id(user_id:str, supabase:AsyncClient) -> List
 
 async def get_integration_by_id(user_id: str, provider: str, supabase: AsyncClient) -> Optional[dict]:
     """
-    ID,로 통합 정보 조회
+    ID로 통합 정보 조회
     """
     try:
         res = await supabase.table("user_integrations") \

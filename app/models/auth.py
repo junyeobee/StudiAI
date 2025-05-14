@@ -6,10 +6,12 @@ from typing import List, Dict
 class UserIntegrationRequest(BaseModel):
     """사용자 통합 요청"""
     id: Optional[str] = Field(None, description="통합 ID (업데이트 시 사용)")
+    user_id: str = Field(..., description="사용자 ID")
     provider: str = Field(..., description="서비스 제공자 (github, notion 등)")
     access_token: str = Field(..., description="접근 토큰")
     refresh_token: Optional[str] = Field(None, description="리프레시 토큰")
     scopes: Optional[List[str]] = Field(None, description="권한 범위")
+    created_at: Optional[datetime] = Field(None, description="생성 시간, 업데이트 시")
     expires_in: Optional[int] = Field(None, description="만료 시간(초)")
 
 class UserIntegration(BaseModel):
