@@ -79,10 +79,9 @@ async def get_integration_by_id(user_id: str, provider: str, supabase: AsyncClie
             .select("*") \
             .eq("user_id", user_id) \
             .eq("provider", provider) \
-            .single() \
             .execute()
         if res and res.data:
-            return res.data
+            return res.data[0]
         return None
     except Exception as e:
         api_logger.error(f"통합 정보 조회 실패: {str(e)}")

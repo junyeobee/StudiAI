@@ -27,13 +27,13 @@ from app.api.v1.dependencies.auth import require_user
 from app.core.config import settings
 from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
+from app.api.v1.dependencies.notion import get_notion_service
 
 router = APIRouter()
-notion_service = NotionService()
 
 # 완료
 @router.get("/active")
-async def get_active_database(user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase)):
+async def get_active_database(user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """현재 활성화된 DB 조회"""
     try:
         # Supabase에서 활성 데이터베이스 정보 조회
@@ -75,7 +75,7 @@ async def list_databases(user_id: str = Depends(require_user), supabase: AsyncCl
 
 # 완료
 @router.get("/{db_id}", response_model=DatabaseResponse)
-async def get_database(db_id: str, user_id: str = Depends(require_user)):
+async def get_database(db_id: str, user_id: str = Depends(require_user), notion_service: NotionService = Depends(get_notion_service)):
     """DB 정보 조회"""
     try:
         #db_key = await get_db_key(db_id, user_id)
@@ -91,7 +91,7 @@ async def get_database(db_id: str, user_id: str = Depends(require_user)):
 
 # 완료
 @router.post("/", response_model=DatabaseResponse)
-async def create_database(db: DatabaseCreate, user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase)):
+async def create_database(db: DatabaseCreate, user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """새로운 DB 생성"""
     try:
         #db_key = await get_db_key(db.title, user_id)
@@ -115,7 +115,7 @@ async def create_database(db: DatabaseCreate, user_id: str = Depends(require_use
 
 # 완료
 @router.put("/{db_id}", response_model=DatabaseResponse)
-async def update_database(db_id: str, db_update: DatabaseUpdate, user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase)):
+async def update_database(db_id: str, db_update: DatabaseUpdate, user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """DB 정보 업데이트"""
     try:
         # 1. Notion API 업데이트
@@ -180,7 +180,7 @@ async def deactivate_all_databases(user_id: str = Depends(require_user), supabas
 
 # 완료
 @router.get("/pages/{page_id}/databases", response_model=List[DatabaseMetadata])
-async def get_page_databases(page_id: str, user_id: str = Depends(require_user)):
+async def get_page_databases(page_id: str, user_id: str = Depends(require_user), notion_service: NotionService = Depends(get_notion_service)):
     """페이지 내의 데이터베이스 목록 조회"""
     try:
         #db_key = await get_db_key(page_id, user_id)

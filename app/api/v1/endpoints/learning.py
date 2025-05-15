@@ -19,17 +19,19 @@ from app.utils.notion_utils import(
     block_content,
     serialize_page_props
 )
+import redis
 from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
 from fastapi import Depends
 from app.api.v1.dependencies.auth import require_user
+from app.api.v1.dependencies.notion import get_notion_service
 from app.utils.logger import api_logger
+from app.core.redis_connect import get_redis
 
 router = APIRouter()
-notion_service = NotionService()
 
 @router.get("/pages")
-async def list_learning_pages(current: bool = False,db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase)):
+async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:str = Depends(require_user), current: bool = False, db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """
     학습 페이지 목록 조회
     - current=true : 현재 used DB 기준
@@ -40,7 +42,7 @@ async def list_learning_pages(current: bool = False,db_id: str | None = None, su
         target_db_id = db_id
         if not target_db_id:
             if current:
-                target_db_id = await get_used_notion_db_id(supabase)
+                target_db_id = await get_used_notion_db_id(supabase, user_id)
             else:
                 api_logger.error("학습 페이지 목록 조회 실패: db_id 또는 current=true 중 하나는 필수입니다.")
                 raise HTTPException(400, "db_id 또는 current=true 중 하나는 필수입니다.")
@@ -63,7 +65,7 @@ async def list_learning_pages(current: bool = False,db_id: str | None = None, su
         raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
-async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depends(get_supabase)):
+async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     notion_db_id = req.notion_db_id
     results = []
 
@@ -94,7 +96,7 @@ async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depend
     }
 
 @router.patch("/pages/{page_id}")
-async def patch_page(page_id: str, req: PageUpdateRequest, supabase: AsyncClient = Depends(get_supabase)):
+async def patch_page(page_id: str, req: PageUpdateRequest, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     print(req)
     payload = jsonable_encoder(req, by_alias=True, exclude_none=True)
     props = payload.get("props")
@@ -126,7 +128,7 @@ async def patch_page(page_id: str, req: PageUpdateRequest, supabase: AsyncClient
 
 # 완료
 @router.get("/pages/{page_id}/content")
-async def get_content(page_id: str):
+async def get_content(page_id: str, notion_service: NotionService = Depends(get_notion_service)):
     try:
         data = await notion_service.get_page_content(page_id)
         print(data)
@@ -139,7 +141,7 @@ async def get_content(page_id: str):
 
 # 페이지 삭제
 @router.delete("/pages/{page_id}")
-async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase)):
+async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     try:
         await notion_service.delete_page(page_id)
         await delete_learning_page(page_id, supabase)

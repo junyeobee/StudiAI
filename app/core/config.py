@@ -34,6 +34,11 @@ class Settings(BaseSettings):
     WEBHOOK_CREATE_URL: str
     WEBHOOK_DELETE_URL: str
     
+    # Redis 설정
+    REDIS_HOST: str
+    REDIS_PORT: str
+    REDIS_PASSWORD: str
+    
     # 보안 설정
     SECRET_KEY: str
     

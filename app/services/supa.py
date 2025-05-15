@@ -137,9 +137,8 @@ async def get_used_notion_db_id(supabase: AsyncClient, user_id: str) -> str | No
         .select("db_id") \
         .eq("status", "used") \
         .eq("user_id", user_id) \
-        .single() \
         .execute()
-    return res.data["db_id"] if res.data else None
+    return res.data[0]["db_id"] if res.data else None
 
 async def update_webhook_info(db_id: str, webhook_id: str, supabase: AsyncClient, status: str = "active") -> dict:
     """웹훅 정보 업데이트"""

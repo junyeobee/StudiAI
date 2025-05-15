@@ -43,3 +43,10 @@ class LearningError(Exception):
     def __init__(self, message: str):
         self.message = message
         super().__init__(self.message) 
+
+class RedisError(Exception):
+    def __init__(self, detail: str):
+        super().__init__(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=detail
+        )

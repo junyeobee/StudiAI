@@ -17,12 +17,11 @@ from app.models.learning import (
     LearningPageCreate,
     LearningPagesRequest
 )
-import base64
 from app.utils.retry import async_retry
 
 class NotionService:
-    def __init__(self):
-        self.api_key = settings.NOTION_API_KEY
+    def __init__(self, token: str):
+        self.api_key = token
         self.api_version = settings.NOTION_API_VERSION
         self.base_url = "https://api.notion.com/v1"
         self.headers = {
@@ -55,25 +54,6 @@ class NotionService:
             )
             raise NotionAPIError(f"API 요청 실패: {text}")
    
-    # 토큰 교환
-    async def exchange_code_for_token(self, code: str) -> dict:
-        try : 
-            async with httpx.AsyncClient() as client:
-                auth = base64.b64encode(f"{settings.NOTION_CLIENT_ID}:{settings.NOTION_CLIENT_SECRET}".encode()).decode()
-                headers = {
-                    "Authorization": f"Basic {auth}",
-                    "Content-Type": "application/json"
-                }
-                body = {
-                    "grant_type": "authorization_code",
-                    "code": code,
-                    "redirect_uri": "http://localhost:8000/auth_public/callback/notion"
-                }
-                res = await client.post("https://api.notion.com/v1/oauth/token", headers=headers, json=body)
-                return res.json()
-        except Exception as e:
-            notion_logger.error(f"토큰 교환 실패: {str(e)}")
-            raise NotionAPIError(f"토큰 교환 실패: {str(e)}")
     
     # 데이터베이스 생성
     async def create_database(self, title: str) -> str:

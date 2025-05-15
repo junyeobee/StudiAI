@@ -17,8 +17,8 @@ from app.api.v1.dependencies.auth import require_user
 from fastapi import Query
 from app.services.notion_service import NotionService
 from app.core.config import settings
-from fastapi.responses import RedirectResponse, HTMLResponse
-from urllib.parse import urlencode
+from app.api.v1.dependencies.notion import get_notion_service
+from app.services.notion_auth import NotionAuthService
 
 router = APIRouter()
 public_router = APIRouter()
@@ -136,12 +136,7 @@ async def initiate_oauth(provider: str, user_id: str = Depends(require_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @public_router.get("/callback/{provider}")
-async def token_callback_get(
-    provider: str,
-    code: str = Query(...),
-    state: str = Query(None),
-    supabase: AsyncClient = Depends(get_supabase)
-):
+async def token_callback_get(provider: str, code: str = Query(...), state: str = Query(None), supabase: AsyncClient = Depends(get_supabase)):
     """
     OAuth 콜백 처리: 코드 교환, 토큰 저장까지 한번에 처리
     """
@@ -149,6 +144,9 @@ async def token_callback_get(
         # state 파싱
         user_id = None
         state_uuid = None
+        print(state)
+        print(code)
+        print(provider)
         if state:
             state_parts = state.split("|")
             for part in state_parts:
@@ -167,15 +165,15 @@ async def token_callback_get(
         print(stored_uuid)
         if not stored_uuid or stored_uuid != state_uuid:
             raise HTTPException(status_code=401, detail="인증 토큰 검증 실패")
-            
+        
         integration_data = await get_integration_by_id(user_id, provider, supabase)
-
+        
         # provider에 따라 토큰 교환
         match provider:
             case "notion":
+                notion_auth_service = NotionAuthService()
                 # 1. NotionService 인스턴스화하여 토큰 교환
-                notion_service = NotionService()
-                token_data = await notion_service.exchange_code_for_token(code)
+                token_data = await notion_auth_service.exchange_code_for_token(code)
                 print(f'token_data: {token_data}')
                 if integration_data:
                     token_request = UserIntegrationRequest(
