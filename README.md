@@ -1,0 +1,15 @@
+- notion-learning-system/
+  - app/
+    - api/
+      - v1/
+        - endpoints/        <!-- 각 도메인별 라우터 -->
+        - dependencies/     <!-- Depends로 주입되는 공통 인증/검증 로직 -->
+    - core/               <!-- 설정, lifespan, init -->
+    - services/           <!-- 외부 연동, 로직 처리 계층 -->
+    - models/             <!-- Pydantic 스키마 -->
+    - utils/              <!-- 로깅, 암호화 등 범용 유틸 함수 -->
+    - config/             <!-- .env 등 설정 주입 -->
+  - logs/
+  - tests/
+  - main.py
+  - requirements.txt
