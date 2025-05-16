@@ -1,0 +1,21 @@
+name: Cleanup Orphaned DBs
+
+on:
+  schedule:
+    - cron: '0 3 * * *'  # 매일 오전 3시 실행
+  workflow_dispatch:     # 수동 실행 옵션 추가
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Supabase RPC
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        run: |
+          curl -X POST "$SUPABASE_URL/rest/v1/rpc/cleanup_expired_orphaned_dbs" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{"days": 30}'
