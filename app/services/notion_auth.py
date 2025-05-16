@@ -20,7 +20,7 @@ class NotionAuthService:
                     "grant_type": "authorization_code",
                     "code": code,
                     # api 주소 변경 -> localhost:8000 -> 실제 주소로 변경
-                    "redirect_uri": "localhost:8000/auth_public/callback/notion"
+                    "redirect_uri": "http://localhost:8000/auth_public/callback/notion"
                 }
                 res = await client.post("https://api.notion.com/v1/oauth/token", headers=headers, json=body)
                 return res.json()

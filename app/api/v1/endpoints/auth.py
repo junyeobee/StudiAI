@@ -174,6 +174,8 @@ async def token_callback_get(provider: str, code: str = Query(...), state: str =
                 notion_auth_service = NotionAuthService()
                 # 1. NotionService 인스턴스화하여 토큰 교환
                 token_data = await notion_auth_service.exchange_code_for_token(code)
+                workspace_id = token_data["workspace_id"]
+                print(f'workspace_id: {workspace_id}')
                 print(f'token_data: {token_data}')
                 if integration_data:
                     token_request = UserIntegrationRequest(

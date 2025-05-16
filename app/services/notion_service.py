@@ -53,8 +53,41 @@ class NotionService:
                 f"   ▶ Error : {text}"
             )
             raise NotionAPIError(f"API 요청 실패: {text}")
-   
+        
     
+    async def get_workspace_top_pages(self, token: str = None) -> List[Dict]:
+        """사용자 워크스페이스의 최상위 페이지 반환"""
+        payload = {
+            "filter": {
+                "value": "page",
+                "property": "object"
+            },
+            "sort": {
+                "direction": "descending",
+                "timestamp": "last_edited_time"
+            }
+        }
+        
+        response = await self._make_request("POST", "search", json=payload, token=token)
+        results = response.get("results", [])
+        
+        # 최상위 페이지만 필터링 (parent.type이 workspace인 경우)
+        top_pages = [
+            {
+                "id": page["id"],
+                "title": page["properties"]["title"]["title"][0]["plain_text"] 
+                        if page.get("properties", {}).get("title", {}).get("title") 
+                        else "Untitled",
+                "url": page["url"],
+                "last_edited": page["last_edited_time"]
+            }
+            for page in results
+            if page.get("parent", {}).get("type") == "workspace"
+        ]
+        
+        return top_pages
+
+
     # 데이터베이스 생성
     async def create_database(self, title: str) -> str:
         """새로운 데이터베이스 생성"""

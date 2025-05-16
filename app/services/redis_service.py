@@ -46,3 +46,15 @@ class RedisService:
         사용자 워크스페이스 정보를 Redis에 저장
         """
         return redis_client.set(f"user:{user_id}:workspace", workspace)
+    
+    async def get_workspace_pages(self, workspace_id: str, redis_client: redis.Redis) -> list:
+        """
+        워크스페이스 페이지 정보를 Redis에서 가져옴
+        """
+        return redis_client.get(f"workspace:{workspace_id}:pages")
+    
+    async def set_workspace_pages(self, workspace_id: str, pages: list, redis_client: redis.Redis) -> bool:
+        """
+        워크스페이스 페이지 정보를 Redis에 저장
+        """
+        return redis_client.set(f"workspace:{workspace_id}:pages", pages)

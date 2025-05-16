@@ -8,6 +8,10 @@ from app.api.v1.dependencies.auth import require_user
 from app.utils.logger import api_logger
 import redis
 from app.services.auth_service import get_integration_token
+from app.services.supa import get_default_workspace
+
+redis_service = RedisService()
+
 
 async def get_notion_service(
     user_id: str = Depends(require_user), 
@@ -15,8 +19,6 @@ async def get_notion_service(
     redis: redis.Redis = Depends(get_redis)
 ):
     # Redis 서비스 초기화
-    redis_service = RedisService()
-    
     try:
         # 먼저 Redis에서 토큰 조회 시도
         token = await redis_service.get_token(user_id, redis)
@@ -40,3 +42,24 @@ async def get_notion_service(
         )
         
     return NotionService(token=token)
+
+async def get_notion_workspace(user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), redis: redis.Redis = Depends(get_redis)) -> str:
+    """기본 노션 워크스페이스 조회"""
+    try:
+        redis_service = RedisService()
+        
+        # Redis에 저장된 워크스페이스 id 조회
+        workspace_id = await redis_service.get_user_workspace(user_id, redis)
+        if workspace_id:
+            return workspace_id
+        
+        # 워크스페이스가 없으면 supabase에서 기본(active) 워크스페이스 조회
+        workspace_id = await get_default_workspace(user_id, supabase)
+        if workspace_id:
+            # Redis에 워크스페이스 id 저장
+            await redis_service.set_user_workspace(user_id, workspace_id, redis)
+        
+        return workspace_id
+    except Exception as e:
+        api_logger.error(f"노션 워크스페이스 조회 실패: {str(e)}")
+        return "조회 실패"

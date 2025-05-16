@@ -2,7 +2,7 @@
 API 라우터 통합
 """
 from fastapi import APIRouter
-from app.api.v1.endpoints import databases, webhooks, learning, auth
+from app.api.v1.endpoints import databases, webhooks, learning, auth, notion_setting
 
 api_router = APIRouter()
 public_router = APIRouter()
@@ -34,8 +34,15 @@ api_router.include_router(
     tags=["auth"]
 ) 
 
+api_router.include_router(
+    notion_setting.router,
+    prefix="/notion_setting",
+    tags=["notion_setting"]
+)
+
 public_router.include_router(
     auth.public_router,
     prefix="/auth_public",
     tags=["auth_public"]
 )
+

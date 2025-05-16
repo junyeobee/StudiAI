@@ -4,6 +4,7 @@ from app.core.config import settings
 from app.utils.logger import api_logger, webhook_logger
 import httpx
 from typing import Optional
+from app.models.notion_workspace import WorkspaceStatusUpdate, WorkspaceStatus, UserWorkspaceList, UserWorkspace
 
 async def insert_learning_database(db_id: str, title: str, parent_page_id: str, supabase: AsyncClient, user_id: str) -> bool:
     """새로운 학습 데이터베이스 등록"""
@@ -537,3 +538,66 @@ async def auth_user(user_id:str, auth_token:str, supabase: AsyncClient) -> dict:
     except Exception as e:
         api_logger.error(f"유저 인증 실패: {str(e)}")
         return None
+
+async def get_default_workspace(user_id: str, supabase: AsyncClient) -> Optional[str]:
+    """기본(active) 워크스페이스 조회"""
+    try:
+        res = await supabase.table("user_workspace").select("*").eq("user_id", user_id).eq("status", "active").execute()
+        if res.data and len(res.data) > 0:
+            return res.data[0]["workspace_id"]
+        return None
+    except Exception as e:
+        api_logger.error(f"기본 워크스페이스 조회 실패: {str(e)}")
+        return None
+
+async def switch_active_workspace(WorkspaceStatusUpdate:WorkspaceStatusUpdate, supabase: AsyncClient) -> dict:
+    """활성 워크스페이스 변경, 기존 워크스페이스 비활성화 한 후 새로운 워크스페이스 활성화, 이전 workspace의 used(사용중인)db도 비활성화 -> RPC 트랜잭션 사용"""
+    try:
+        result = await supabase.rpc("activate_workspace_transaction",{
+            "p_user_id": WorkspaceStatusUpdate.user_id, 
+            "p_workspace_id": WorkspaceStatusUpdate.workspace_id
+        }).execute()
+
+        return result.data
+    except Exception as e:
+        api_logger.error(f"워크스페이스 활성화 실패: {str(e)}")
+        raise e
+    
+async def deactivate_all_workspaces(user_id: str, supabase: AsyncClient) -> dict:
+    """유저의 모든 워크스페이스 비활성화, 이전 workspace의 used(사용중인)db도 비활성화 -> RPC 트랜잭션 사용"""
+    try:
+        result = await supabase.rpc("activate_workspace_transaction",{
+            "p_user_id": user_id, 
+            "p_workspace_id": None
+        }).execute()
+
+        return result.data
+    except Exception as e:
+        api_logger.error(f"워크스페이스 비활성화 실패: {str(e)}")
+        raise e
+
+async def get_workspaces(user_id: str, supabase: AsyncClient) -> UserWorkspaceList:
+    """유저의 모든 워크스페이스 조회"""
+    try:
+        res = await supabase.table("user_workspace").select("*").eq("user_id", user_id).execute()
+        return UserWorkspaceList(workspaces=res.data)
+    except Exception as e:
+        api_logger.error(f"워크스페이스 조회 실패: {str(e)}")
+        raise e
+
+async def set_workspaces(workspaces: list[UserWorkspace], supabase: AsyncClient) -> dict:
+    """유저의 워크스페이스 설정 (upsert 사용)"""
+    try:
+        # 데이터 준비
+        workspace_data = [ws.model_dump() for ws in workspaces]
+        
+        # upsert로 변경 (중복 방지)
+        res = await supabase.table("user_workspace").upsert(
+            workspace_data, 
+            on_conflict=["user_id", "workspace_id"]
+        ).execute()
+        
+        return res.data
+    except Exception as e:
+        api_logger.error(f"워크스페이스 설정 실패: {str(e)}")
+        raise e
