@@ -11,8 +11,6 @@ async def init_redis_client() -> redis.Redis:
             decode_responses=True,
             username="default",
         )
-        # 연결 테스트
-        print(client.ping())
         return client
     except Exception as e:
         raise e

@@ -6,7 +6,7 @@ import httpx
 from typing import Optional
 from app.models.notion_workspace import WorkspaceStatusUpdate, WorkspaceStatus, UserWorkspaceList, UserWorkspace
 
-async def insert_learning_database(db_id: str, title: str, parent_page_id: str, supabase: AsyncClient, user_id: str) -> bool:
+async def insert_learning_database(db_id: str, title: str, parent_page_id: str, workspace_id: str, supabase: AsyncClient) -> bool:
     """새로운 학습 데이터베이스 등록"""
     try:
         data = {
@@ -16,7 +16,7 @@ async def insert_learning_database(db_id: str, title: str, parent_page_id: str, 
             "status": "ready",
             "created_at": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
-            "user_id": user_id
+            "workspace_id": workspace_id
         }
         res = await supabase.table("learning_databases").insert(data).execute()
         return bool(res.data)
@@ -25,10 +25,10 @@ async def insert_learning_database(db_id: str, title: str, parent_page_id: str, 
         return False
 
 
-async def get_learning_database_by_title(title: str, supabase: AsyncClient, user_id: str) -> tuple:
+async def get_learning_database_by_title(title: str, supabase: AsyncClient, workspace_id: str) -> tuple:
     """제목으로 학습 데이터베이스 정보 조회"""
     try:
-        res = await supabase.table("learning_databases").select("id, db_id").eq("title", title).eq("user_id", user_id).execute()
+        res = await supabase.table("learning_databases").select("id, db_id").eq("title", title).eq("workspace_id", workspace_id).execute()
         data = res.data
         if data:
             return data[0]["db_id"], data[0]["id"]
@@ -37,27 +37,27 @@ async def get_learning_database_by_title(title: str, supabase: AsyncClient, user
         api_logger.error(f"데이터베이스 조회 실패: {str(e)}")
         return None, None
 
-async def get_active_learning_database(supabase: AsyncClient, user_id: str) -> dict:
+async def get_active_learning_database(supabase: AsyncClient, workspace_id: str) -> dict:
     """현재 활성화된 학습 데이터베이스 조회"""
     try:
-        res = await supabase.table("learning_databases").select("*").eq("status", "used").eq("user_id", user_id).execute()
+        res = await supabase.table("learning_databases").select("*").eq("status", "used").eq("workspace_id", workspace_id).execute()
         data = res.data
         if data:
-            await update_last_used_date(data[0]["id"], supabase, user_id)
+            await update_last_used_date(data[0]["id"], supabase, workspace_id)
             return data[0]
         return None
     except Exception as e:
         api_logger.error(f"활성 데이터베이스 조회 실패: {str(e)}")
         return None
 
-async def update_learning_database_status(db_id: Optional[str], status: str, supabase: AsyncClient, user_id: str) -> dict:
+async def update_learning_database_status(db_id: Optional[str], status: str, supabase: AsyncClient, workspace_id: str) -> dict:
     """학습 데이터베이스 상태 업데이트"""
     try:
         # 기존 used 상태인 레코드 여부
         resp = await supabase.table("learning_databases") \
             .select("id") \
             .eq("status", "used") \
-            .eq("user_id", user_id) \
+            .eq("workspace_id", workspace_id) \
             .execute()
         print(resp)
         old_id = resp.data[0]["id"] if resp.data else None
@@ -88,32 +88,32 @@ async def update_learning_database_status(db_id: Optional[str], status: str, sup
         api_logger.error(f"DB 상태 업데이트 실패(db_id={db_id}, status={status}): {e}")
         return None
 
-async def update_last_used_date(id: int, supabase: AsyncClient, user_id: str) -> bool:
+async def update_last_used_date(id: int, supabase: AsyncClient, workspace_id: str) -> bool:
     """마지막 사용일 업데이트"""
     try:
         res = await supabase.table("learning_databases").update({
             "last_used_date": datetime.now().isoformat(),
             "updated_at": datetime.now().isoformat(),
-            "user_id": user_id
+            "workspace_id": workspace_id
         }).eq("id", id).execute()
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"마지막 사용일 업데이트 실패: {str(e)}")
         return False
 
-async def get_available_learning_databases(supabase: AsyncClient, user_id: str) -> list:
+async def get_available_learning_databases(supabase: AsyncClient, workspace_id: str) -> list:
     """사용 가능한 학습 데이터베이스 목록 조회"""
     try:
-        res = await supabase.table("learning_databases").select("*").eq("status", "ready").eq("user_id", user_id).execute()
+        res = await supabase.table("learning_databases").select("*").eq("status", "ready").eq("workspace_id", workspace_id).execute()
         return res.data if res and hasattr(res, 'data') else []
     except Exception as e:
         api_logger.error(f"사용 가능한 데이터베이스 조회 실패: {str(e)}")
         return []
 
-async def list_all_learning_databases(supabase: AsyncClient, user_id: str, status: str = None) -> list:
+async def list_all_learning_databases(supabase: AsyncClient, workspace_id: str, status: str = None) -> list:
     """모든 학습 데이터베이스 목록 조회"""
     try:
-        query = supabase.table("learning_databases").select("*").eq("user_id", user_id)
+        query = supabase.table("learning_databases").select("*").eq("workspace_id", workspace_id)
         if status:
             query = query.eq("status", status)
         res = await query.order("updated_at", desc=True).execute()
@@ -122,22 +122,22 @@ async def list_all_learning_databases(supabase: AsyncClient, user_id: str, statu
         api_logger.error(f"데이터베이스 목록 조회 실패: {str(e)}")
         return []
 
-async def get_db_info_by_id(db_id: str, supabase: AsyncClient, user_id: str) -> dict:
+async def get_db_info_by_id(db_id: str, supabase: AsyncClient, workspace_id: str) -> dict:
     """데이터베이스 ID로 정보 조회"""
     try:
-        res = await supabase.table("learning_databases").select("*").eq("db_id", db_id).eq("user_id", user_id).execute()
+        res = await supabase.table("learning_databases").select("*").eq("db_id", db_id).eq("workspace_id", workspace_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"데이터베이스 정보 조회 실패: {str(e)}")
         return None
 
 # 현재 사용중인 Notion DB ID 조회
-async def get_used_notion_db_id(supabase: AsyncClient, user_id: str) -> str | None:
+async def get_used_notion_db_id(supabase: AsyncClient, workspace_id: str) -> str | None:
     """현재 사용중인 Notion DB ID 조회"""
     res = await supabase.table("learning_databases") \
         .select("db_id") \
         .eq("status", "used") \
-        .eq("user_id", user_id) \
+        .eq("workspace_id", workspace_id) \
         .execute()
     return res.data[0]["db_id"] if res.data else None
 

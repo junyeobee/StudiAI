@@ -55,7 +55,7 @@ class NotionService:
             raise NotionAPIError(f"API 요청 실패: {text}")
         
     
-    async def get_workspace_top_pages(self, token: str = None) -> List[Dict]:
+    async def get_workspace_top_pages(self) -> List[Dict]:
         """사용자 워크스페이스의 최상위 페이지 반환"""
         payload = {
             "filter": {
@@ -68,7 +68,7 @@ class NotionService:
             }
         }
         
-        response = await self._make_request("POST", "search", json=payload, token=token)
+        response = await self._make_request("POST", "search", json=payload)
         results = response.get("results", [])
         
         # 최상위 페이지만 필터링 (parent.type이 workspace인 경우)
@@ -89,10 +89,10 @@ class NotionService:
 
 
     # 데이터베이스 생성
-    async def create_database(self, title: str) -> str:
+    async def create_database(self, title: str, parent_page_id: str) -> str:
         """새로운 데이터베이스 생성"""
         data = {
-            "parent": {"page_id": settings.NOTION_PARENT_PAGE_ID},
+            "parent": {"page_id": parent_page_id},
             "title": [{"text": {"content": title}}],
             "properties": {
                 "학습 제목": {"title": {}},
@@ -109,12 +109,12 @@ class NotionService:
         return DatabaseInfo(
             db_id=response["id"],
             title=title,
-            parent_page_id=settings.NOTION_PARENT_PAGE_ID,
+            parent_page_id=parent_page_id,
             status=DatabaseStatus.READY,
             last_used_date=datetime.now()
         )
     # 데이터베이스 정보 조회
-    async def get_database(self, database_id: str) -> DatabaseInfo:
+    async def get_database(self, database_id: str, workspace_id: str) -> DatabaseInfo:
         """데이터베이스 정보 조회"""
         response = await self._make_request("GET", f"databases/{database_id}")
         
@@ -125,7 +125,8 @@ class NotionService:
             status=DatabaseStatus.READY,
             last_used_date=datetime.now(),
             webhook_id=None,
-            webhook_status="inactive"
+            webhook_status="inactive",
+            workspace_id=workspace_id
         )
 
     # 페이지에 연결된 데이터베이스 목록 조회
@@ -164,7 +165,8 @@ class NotionService:
             status=db_info["status"],
             last_used_date=db_info.get("last_used_date", datetime.now()),
             webhook_id=db_info.get("webhook_id"),
-            webhook_status=db_info.get("webhook_status", "inactive")
+            webhook_status=db_info.get("webhook_status", "inactive"),
+            workspace_id=db_info.get("workspace_id")
         )
 
     # 데이터베이스 정보 업데이트 (Notion API만)
@@ -199,7 +201,7 @@ class NotionService:
     # 학습 페이지 생성
     async def create_learning_page(self, database_id: str, plan: LearningPageCreate) -> tuple[str, str]:
         """
-        - 페이지를 생성하고 학습 목표, AI 요약 블록 템플릿 추가
+        - 데이터 베이스에 페이지(row)를 생성하고 학습 목표, AI 요약 블록 템플릿 추가
         - (page_id, ai_block_id) 튜플을 반환
         """
         # 1) 페이지 속성

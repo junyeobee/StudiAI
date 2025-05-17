@@ -13,7 +13,6 @@ async def lifespan(app: FastAPI):
         # Supabase 클라이언트 초기화 및 app.state에 저장
         app.state.supabase = await init_supabase()
         api_logger.info("Supabase 클라이언트 초기화 완료")
-        api_logger.info(settings.NOTION_PARENT_PAGE_ID)
         app.state.redis = await init_redis_client()
         api_logger.info("Redis 클라이언트 초기화 완료")
         yield

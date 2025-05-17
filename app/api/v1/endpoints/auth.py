@@ -10,18 +10,19 @@ from app.services.auth_service import (
     get_masked_keys,
     revoke_api_key
 )
+from app.core.redis_connect import get_redis
 from app.models.auth import ApiKeyResponse, ApiKeyList, MessageResponse
 from app.models.auth import UserIntegrationRequest, UserIntegrationResponse
 from app.services.auth_service import encrypt_token, get_integration_token, get_integration_by_id
 from app.api.v1.dependencies.auth import require_user
 from fastapi import Query
-from app.services.notion_service import NotionService
+from app.services.auth_service import process_notion_oauth, parse_oauth_state
 from app.core.config import settings
-from app.api.v1.dependencies.notion import get_notion_service
-from app.services.notion_auth import NotionAuthService
+from app.services.redis_service import RedisService
 
 router = APIRouter()
 public_router = APIRouter()
+redis_service = RedisService()
 
 # 임시 저장소 (실제로는 Redis 사용 예정)
 temp_state_store = {
@@ -114,14 +115,14 @@ async def get_integration(provider: str, user_id: str = Depends(require_user),su
         )
     
 @router.get("/oauth/{provider}")
-async def initiate_oauth(provider: str, user_id: str = Depends(require_user)):
+async def initiate_oauth(provider: str, user_id: str = Depends(require_user), redis = Depends(get_redis)):
     """
     OAuth 인증 시작
     """
     try:
-        # 고정된 state 값 사용 (실제로는 UUID 사용 예정)
-        state_uuid = "fixed-state-uuid-12345"
-        
+        # state_uuid 생성
+        state_uuid = await redis_service.set_state_uuid(user_id, redis)
+        print(state_uuid + "생성")
         # state 파라미터 생성 (검증용)
         state_param = f"user_id={user_id}|uuid={state_uuid}"
         
@@ -136,75 +137,33 @@ async def initiate_oauth(provider: str, user_id: str = Depends(require_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 @public_router.get("/callback/{provider}")
-async def token_callback_get(provider: str, code: str = Query(...), state: str = Query(None), supabase: AsyncClient = Depends(get_supabase)):
+async def token_callback_get(provider: str, code: str = Query(...), state: str = Query(None), supabase: AsyncClient = Depends(get_supabase), redis = Depends(get_redis)):
     """
-    OAuth 콜백 처리: 코드 교환, 토큰 저장까지 한번에 처리
+    OAuth 콜백 처리: 코드 교환, state 검증, 토큰 저장, 워크스페이스 저장
     """
     try:
-        # state 파싱
-        user_id = None
-        state_uuid = None
-        print(state)
-        print(code)
-        print(provider)
-        if state:
-            state_parts = state.split("|")
-            for part in state_parts:
-                match part:
-                    case p if p.startswith("user_id="):
-                        user_id = p.split("user_id=")[1]
-                        print(user_id)
-                    case p if p.startswith("uuid="):
-                        state_uuid = p.split("uuid=")[1]
-                        print(state_uuid)
+        # 1. state 파싱
+        user_id, state_uuid = parse_oauth_state(state)
         if not user_id or not state_uuid:
             raise HTTPException(status_code=401, detail="인증 정보 없음")
         
-        # UUID 검증 (임시 저장소에서 확인)
-        stored_uuid = temp_state_store.get("uuid")
-        print(stored_uuid)
-        if not stored_uuid or stored_uuid != state_uuid:
-            raise HTTPException(status_code=401, detail="인증 토큰 검증 실패")
+        # 2. state 검증
+        valid = await redis_service.validate_state_uuid(user_id, state_uuid, redis)
+        if not valid:
+            raise HTTPException(status_code=401, detail="인증 토큰 검증 실패 또는 만료됨")
         
-        integration_data = await get_integration_by_id(user_id, provider, supabase)
-        
-        # provider에 따라 토큰 교환
+        # 3. 프로바이더별 처리
         match provider:
             case "notion":
-                notion_auth_service = NotionAuthService()
-                # 1. NotionService 인스턴스화하여 토큰 교환
-                token_data = await notion_auth_service.exchange_code_for_token(code)
-                workspace_id = token_data["workspace_id"]
-                print(f'workspace_id: {workspace_id}')
-                print(f'token_data: {token_data}')
-                if integration_data:
-                    token_request = UserIntegrationRequest(
-                        id=integration_data["id"],
-                        user_id=user_id,
-                        provider=provider,
-                        access_token=token_data["access_token"],
-                        refresh_token=token_data.get("refresh_token"),
-                        expires_in=token_data.get("expires_in"),
-                        scopes=token_data.get("scope", "").split() if token_data.get("scope") else None
-                    )
-                    # 2. 토큰 요청 모델 생성
-                else:
-                    token_request = UserIntegrationRequest(
-                        user_id=user_id,
-                        provider=provider,
-                        access_token=token_data["access_token"],
-                        refresh_token=token_data.get("refresh_token"),
-                        expires_in=token_data.get("expires_in"),
-                        scopes=token_data.get("scope", "").split() if token_data.get("scope") else None
-                    )
-
-                # 3. 토큰 암호화 및 저장
-                result = await encrypt_token(user_id, token_request, supabase)
-                
-                # 4. 성공 응답 반환
-                return {"message": "노션 토큰 설정 완료, AI AGENT로 돌아가주세요.", "provider": provider, "integration_id": result["id"] if isinstance(result, dict) and "id" in result else None}
+                # 서비스 계층의 함수로 위임
+                result = await process_notion_oauth(user_id, code, supabase)
+                return {
+                    "message": "노션 토큰 설정 완료, AI AGENT로 돌아가주세요.",
+                    **result
+                }
             case "github":
-                return {"message": "깃허브 토큰 설정 완료, AI AGENT로 돌아가주세요.", "provider": provider, "integration_id": result["id"] if isinstance(result, dict) and "id" in result else None}
+                # 향후 구현
+                return {"message": "깃허브 토큰 설정 완료, AI AGENT로 돌아가주세요."}
             case _:
                 raise HTTPException(status_code=400, detail=f"지원하지 않는 제공자: {provider}")
     except Exception as e:

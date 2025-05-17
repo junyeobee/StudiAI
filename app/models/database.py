@@ -31,6 +31,7 @@ class DatabaseInfo(BaseModel):
     webhook_id: Optional[str] = Field(None, description="웹훅 ID")
     webhook_status: Optional[WebhookStatus] = Field(None, description="웹훅 상태 (active / inactive / pending / failed)")
     last_used_date: Optional[datetime] = Field(None, description="마지막 사용 일시")
+    workspace_id: Optional[str] = Field(None, description="워크스페이스 ID")
 
 
 class DatabaseCreate(BaseModel):
@@ -47,6 +48,7 @@ class DatabaseUpdate(BaseModel):
     webhook_id: Optional[str] = Field(None, description="웹훅 ID")
     webhook_status: Optional[WebhookStatus] = Field(None, description="웹훅 상태 (active / inactive / pending / failed)")
     last_used_date: Optional[datetime] = Field(None, description="마지막 사용 일시")
+    workspace_id: Optional[str] = Field(None, description="워크스페이스 ID")
 
     def dict(self, **kwargs):
         """`None` 값을 제외한 dict 반환"""

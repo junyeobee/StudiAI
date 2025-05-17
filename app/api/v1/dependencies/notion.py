@@ -45,9 +45,7 @@ async def get_notion_service(
 
 async def get_notion_workspace(user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), redis: redis.Redis = Depends(get_redis)) -> str:
     """기본 노션 워크스페이스 조회"""
-    try:
-        redis_service = RedisService()
-        
+    try:        
         # Redis에 저장된 워크스페이스 id 조회
         workspace_id = await redis_service.get_user_workspace(user_id, redis)
         if workspace_id:

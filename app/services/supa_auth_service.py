@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import List, Dict, Optional
 from app.core.exceptions import DatabaseError
 from app.models.auth import UserIntegration, UserIntegrationResponse
+from app.models.notion_workspace import UserWorkspace,UserWorkspaceList
 
 async def get_user_by_key_hash(hashed_key: str, supabase: AsyncClient):
     """해시된 API 키로 유저 조회"""
@@ -109,4 +110,37 @@ async def save_integration_token(request:UserIntegration, supabase:AsyncClient) 
         api_logger.error(f"통합 토큰 저장 실패: {str(e)}")
         raise DatabaseError(e)
     
+async def set_user_workspace(user_workspaces:UserWorkspaceList, supabase:AsyncClient):
+    """
+    사용자 워크스페이스 설정
+    """
+    try:
+        for user_workspace in user_workspaces.workspaces:
+            data_dict = user_workspace.model_dump()
+            res = await supabase.table("user_workspace").upsert(data_dict).execute()
+        return res
+    except Exception as e:
+        api_logger.error(f"사용자 워크스페이스 설정 실패: {str(e)}")
+        raise DatabaseError(e)
+    
+async def get_user_workspaces(user_id:str, supabase:AsyncClient):
+    """
+    사용자 워크스페이스 목록 조회()
+    """
+    try:
+        res = await supabase.table("user_workspace").select("*").eq("user_id", user_id).execute()
+        return res.data if res.data else None
+    except Exception as e:
+        api_logger.error(f"사용자 워크스페이스 목록 조회 실패: {str(e)}")
+        raise DatabaseError(e)
 
+async def delete_user_workspace(user_id:str, workspace_id:str, supabase:AsyncClient):
+    """
+    사용자 워크스페이스 삭제
+    """
+    try:
+        res = await supabase.table("user_workspace").delete().eq("user_id", user_id).eq("workspace_id", workspace_id).execute()
+        return res
+    except Exception as e:
+        api_logger.error(f"사용자 워크스페이스 삭제 실패: {str(e)}")
+        raise DatabaseError(e)

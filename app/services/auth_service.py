@@ -12,13 +12,17 @@ from app.services.supa_auth_service import (
     delete_user_api_key,
     get_integrations_by_user_id,
     get_integration_by_id,
-    save_integration_token
+    save_integration_token,
+    get_user_workspaces,
+    set_user_workspace
 )
 import base64
 from app.models.auth import UserIntegrationRequest, UserIntegrationResponse, UserIntegration
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 from app.core.config import settings
+from app.services.notion_auth import NotionAuthService
+from app.models.notion_workspace import UserWorkspace, UserWorkspaceList
 
 async def generate_api_key(user_id: str, supabase: AsyncClient) -> str:
     """
@@ -256,3 +260,84 @@ async def verify_integration_token(user_id: str,provider: str,token_to_verify: s
     except Exception as e:
         api_logger.error(f"토큰 검증 실패: {str(e)}")
         return False
+
+def parse_oauth_state(state: str) -> tuple:
+    """
+    OAuth state 파라미터 파싱
+    
+    Args:
+        state: OAuth 콜백으로 전달된 state 문자열
+        
+    Returns:
+        (user_id, state_uuid) 튜플
+    """
+    user_id, state_uuid = None, None
+    if state:
+        state_parts = state.split("|")
+        for part in state_parts:
+            if part.startswith("user_id="):
+                user_id = part.split("user_id=")[1]
+            elif part.startswith("uuid="):
+                state_uuid = part.split("uuid=")[1]
+    return user_id, state_uuid
+
+async def process_notion_oauth(user_id: str, code: str, supabase: AsyncClient) -> dict:
+    """
+    Notion OAuth 코드 교환 및 토큰 저장
+    
+    Args:
+        user_id: 사용자 ID
+        code: OAuth 인증 코드
+        supabase: Supabase 클라이언트
+        
+    Returns:
+        처리 결과 딕셔너리
+    """
+    try:
+        # 1. 토큰 교환
+        notion_auth_service = NotionAuthService()
+        token_data = await notion_auth_service.exchange_code_for_token(code)
+        
+        # 2. 워크스페이스 정보 추출
+        workspace_id = token_data["workspace_id"]
+        
+        # 3. 워크스페이스 저장
+        user_workspace = UserWorkspace(
+            user_id=user_id,
+            workspace_id=token_data["workspace_id"],
+            workspace_name=token_data["workspace_name"],
+            provider="notion",
+            status='inactive'
+        )
+        workspaces_list = UserWorkspaceList(workspaces=[user_workspace])
+        await set_user_workspace(workspaces_list, supabase)
+        
+        # 4. 토큰 저장
+        integration_data = await get_integration_by_id(user_id, "notion", supabase)
+        token_request = _create_token_request(user_id, "notion", token_data, integration_data)
+        result = await encrypt_token(user_id, token_request, supabase)
+        
+        return {
+            "provider": "notion",
+            "workspace_id": workspace_id,
+            "integration_id": result.get("id") if isinstance(result, dict) else None
+        }
+    except Exception as e:
+        api_logger.error(f"Notion OAuth 처리 실패: {str(e)}")
+        raise e
+
+def _create_token_request(user_id: str, provider: str, token_data: dict, integration_data: dict = None) -> UserIntegrationRequest:
+    """토큰 저장 요청 객체 생성 (내부 헬퍼 함수)"""
+    base_args = {
+        "user_id": user_id,
+        "provider": provider,
+        "access_token": token_data["access_token"],
+        "refresh_token": token_data.get("refresh_token"),
+        "expires_in": token_data.get("expires_in"),
+        "scopes": token_data.get("scope", "").split() if token_data.get("scope") else None
+    }
+    
+    if integration_data:
+        base_args["id"] = integration_data["id"]
+        
+    return UserIntegrationRequest(**base_args)
