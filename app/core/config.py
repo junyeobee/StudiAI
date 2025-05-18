@@ -37,18 +37,23 @@ class Settings(BaseSettings):
     REDIS_HOST: str
     REDIS_PORT: str
     REDIS_PASSWORD: str
+
+    GITHUB_CLIENT_ID : str
+    GITHUB_SECRET_KEY : str
     
     # 보안 설정
     SECRET_KEY: str
     
     ENCRYPTION_KEY: str
 
+    API_BASE_URL:str
+
     # 로깅 설정
     LOG_LEVEL: str = "DEBUG"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     
     class Config:
-        env_file = ".env"
+        env_file = "app/core/.env"
         case_sensitive = True
 
 settings = Settings() 

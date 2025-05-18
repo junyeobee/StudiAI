@@ -41,6 +41,12 @@ notion_handler = logging.FileHandler(log_file, encoding='utf-8')
 notion_handler.setFormatter(logging.Formatter(log_format, date_format))
 notion_logger.addHandler(notion_handler)
 
+# Github 로거 설정
+github_logger = logging.getLogger("github")
+github_logger.setLevel(logging.INFO)
+github_handler = logging.FileHandler(log_file, encoding='utf-8')
+github_handler.setFormatter(logging.Formatter(log_format, date_format))
+github_logger.addHandler(github_handler)
 def setup_logging():
     """로깅 설정을 초기화합니다."""
     # 콘솔 핸들러 추가

@@ -21,7 +21,7 @@ from app.models.auth import UserIntegrationRequest, UserIntegrationResponse, Use
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 from app.core.config import settings
-from app.services.notion_auth import NotionAuthService
+from app.services.OAuth_service import OAuthService
 from app.models.notion_workspace import UserWorkspace, UserWorkspaceList
 
 async def generate_api_key(user_id: str, supabase: AsyncClient) -> str:
@@ -295,8 +295,8 @@ async def process_notion_oauth(user_id: str, code: str, supabase: AsyncClient) -
     """
     try:
         # 1. 토큰 교환
-        notion_auth_service = NotionAuthService()
-        token_data = await notion_auth_service.exchange_code_for_token(code)
+        oauth_service = OAuthService()
+        token_data = await oauth_service.exchange_notion_code(code)
         
         # 2. 워크스페이스 정보 추출
         workspace_id = token_data["workspace_id"]
@@ -325,6 +325,51 @@ async def process_notion_oauth(user_id: str, code: str, supabase: AsyncClient) -
     except Exception as e:
         api_logger.error(f"Notion OAuth 처리 실패: {str(e)}")
         raise e
+    
+async def process_github_oauth(user_id: str, code: str, supabase: AsyncClient) -> dict:
+    """GitHub OAuth 처리: 코드 교환, 토큰 저장"""
+    try:
+        # 1. GitHub 인증 서비스 초기화
+        oauth_service = OAuthService()
+        
+        # 2. 코드를 토큰으로 교환
+        token_data = await oauth_service.exchange_github_code(code)
+        
+        # 3. 필요한 토큰 데이터 추출
+        access_token = token_data.get("access_token")
+        
+        # 4. 기존 통합 정보 확인 (업데이트를 위해)
+        integration_data = await get_integration_by_id(user_id, "github", supabase)
+        
+        # 5. 통합 요청 객체 생성
+        if integration_data:
+            token_request = UserIntegrationRequest(
+                id=integration_data["id"],
+                user_id=user_id,
+                provider="github",
+                access_token=access_token,
+                scopes=token_data.get("scope", "").split(",") if token_data.get("scope") else None
+            )
+        else:
+            token_request = UserIntegrationRequest(
+                user_id=user_id,
+                provider="github",
+                access_token=access_token,
+                scopes=token_data.get("scope", "").split(",") if token_data.get("scope") else None
+            )
+        
+        # 6. 토큰 암호화 및 저장
+        result = await encrypt_token(user_id, token_request, supabase)
+        
+        # 7. 결과 반환
+        return {
+            "provider": "github",
+            "integration_id": result.get("id") if isinstance(result, dict) else None
+        }
+    except Exception as e:
+        api_logger.error(f"GitHub OAuth 처리 실패: {str(e)}")
+        raise e
+
 
 def _create_token_request(user_id: str, provider: str, token_data: dict, integration_data: dict = None) -> UserIntegrationRequest:
     """토큰 저장 요청 객체 생성 (내부 헬퍼 함수)"""

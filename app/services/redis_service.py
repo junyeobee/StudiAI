@@ -8,6 +8,30 @@ import uuid
 class RedisService:
     def __init__(self):
         self.logger = api_logger
+    async def set_user_id(self, user_id:str, bearer_token: str, redis_client: redis.Redis) -> bool:
+        """
+        Bearer 토큰을 통해 사용자 ID를 저장(1시간 만료)
+        """
+        try:
+            return redis_client.set(f"user:{bearer_token}:id", user_id, ex = 3600)
+        except Exception as e:
+            self.logger.warning(f"Redis 작업 중 오류 발생: {str(e)}")
+            return False
+    
+    async def get_user_id(self, bearer_token: str, redis_client: redis.Redis) -> str:
+        """
+        Bearer 토큰을 통해 사용자 ID를 조회
+        """
+        try:
+            # Redis 조회 시도
+            user_id = redis_client.get(f"user:{bearer_token}:id")
+            if user_id:
+                return user_id
+        except (redis.ConnectionError, redis.TimeoutError) as e:
+            self.logger.warning(f"Redis 연결 실패: {str(e)}")
+        except Exception as e:
+            self.logger.warning(f"Redis 작업 중 오류 발생: {str(e)}")
+        return None
     
     @async_retry(max_retries=3)
     async def set_token(self, user_id: str, token: str, redis_client: redis.Redis, expire_seconds: int = 3600) -> bool:

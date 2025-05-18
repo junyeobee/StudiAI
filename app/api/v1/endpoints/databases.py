@@ -128,7 +128,7 @@ async def create_database(db: DatabaseCreate, user_id: str = Depends(require_use
         return DatabaseResponse(
             status="success",
             data=database,
-            message="DB 성공적으로 생성되었습니다."
+            message="DB 성공적으로 생성되었습니다, Github 연동 설정을 하려면 레포지터리 링크를 포함하고, github.create_webhook 액션을 호출해주세요."
         )
     except NotionAPIError as e:
         api_logger.error(f"DB 생성 실패: {str(e)}")

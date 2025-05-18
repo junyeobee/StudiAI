@@ -30,7 +30,6 @@ def get_top_level_pages(access_token):
         ]
         
         # 결과 출력
-        print(f"최상위 페이지 {len(top_level_pages)}개 발견:")
         for page in top_level_pages:
             title = page.get("properties", {}).get("title", {}).get("title", [])
             title_text = title[0].get("plain_text") if title else "제목 없음"

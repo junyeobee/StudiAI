@@ -11,13 +11,13 @@ from app.services.auth_service import (
     revoke_api_key
 )
 from app.core.redis_connect import get_redis
-from app.models.auth import ApiKeyResponse, ApiKeyList, MessageResponse
-from app.models.auth import UserIntegrationRequest, UserIntegrationResponse
+from app.models.auth import ApiKeyResponse, ApiKeyList, MessageResponse, UserIntegrationRequest, UserIntegrationResponse
 from app.services.auth_service import encrypt_token, get_integration_token, get_integration_by_id
 from app.api.v1.dependencies.auth import require_user
 from fastapi import Query
-from app.services.auth_service import process_notion_oauth, parse_oauth_state
+from app.services.auth_service import process_notion_oauth, parse_oauth_state, process_github_oauth
 from app.core.config import settings
+import urllib.parse
 from app.services.redis_service import RedisService
 
 router = APIRouter()
@@ -127,12 +127,27 @@ async def initiate_oauth(provider: str, user_id: str = Depends(require_user), re
         state_param = f"user_id={user_id}|uuid={state_uuid}"
         
         # 리다이렉트 URL 생성
-        if provider == "notion":
-            redirect_uri = "http://localhost:8000/auth_public/callback/notion"
-            notion_auth_url = f"https://api.notion.com/v1/oauth/authorize?client_id={settings.NOTION_CLIENT_ID}&redirect_uri={redirect_uri}&response_type=code&state={state_param}"
-            return {"auth_url": notion_auth_url}
-        else:
-            raise HTTPException(status_code=400, detail=f"지원하지 않는 제공자: {provider}")
+        match provider:
+            case "notion":
+                redirect_uri = f"{settings.API_BASE_URL}/auth_public/callback/notion"
+                encoded_state_param = urllib.parse.quote(state_param)
+                notion_auth_url = f"https://api.notion.com/v1/oauth/authorize?client_id={settings.NOTION_CLIENT_ID}&redirect_uri={redirect_uri}&response_type=code&state={encoded_state_param}"
+                return {"auth_url": notion_auth_url}
+            case "github":
+                redirect_uri = f"{settings.API_BASE_URL}/auth_public/callback/github"
+                encoded_redirect_uri = urllib.parse.quote(redirect_uri)
+                encoded_state_param = urllib.parse.quote(state_param)
+                
+                # 명시적으로 repo 및 admin:repo_hook 권한 요청
+                scope = "repo admin:repo_hook"
+                encoded_scope = urllib.parse.quote(scope)
+                
+                # GitHub OAuth 인증 URL 구성
+                github_auth_url = f"https://github.com/login/oauth/authorize?client_id={settings.GITHUB_CLIENT_ID}&redirect_uri={encoded_redirect_uri}&scope={encoded_scope}&state={encoded_state_param}"
+                
+                return {"auth_url": github_auth_url}
+            case _:
+                raise HTTPException(status_code=400, detail=f"지원하지 않는 제공자: {provider}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -144,6 +159,7 @@ async def token_callback_get(provider: str, code: str = Query(...), state: str =
     try:
         # 1. state 파싱
         user_id, state_uuid = parse_oauth_state(state)
+        print(user_id, state_uuid)
         if not user_id or not state_uuid:
             raise HTTPException(status_code=401, detail="인증 정보 없음")
         
@@ -152,18 +168,19 @@ async def token_callback_get(provider: str, code: str = Query(...), state: str =
         if not valid:
             raise HTTPException(status_code=401, detail="인증 토큰 검증 실패 또는 만료됨")
         
-        # 3. 프로바이더별 처리
         match provider:
             case "notion":
-                # 서비스 계층의 함수로 위임
                 result = await process_notion_oauth(user_id, code, supabase)
                 return {
                     "message": "노션 토큰 설정 완료, AI AGENT로 돌아가주세요.",
                     **result
                 }
             case "github":
-                # 향후 구현
-                return {"message": "깃허브 토큰 설정 완료, AI AGENT로 돌아가주세요."}
+                result = await process_github_oauth(user_id, code, supabase)
+                return {
+                    "message": "깃허브 토큰 설정 완료, AI AGENT로 돌아가주세요.",
+                    **result
+                }
             case _:
                 raise HTTPException(status_code=400, detail=f"지원하지 않는 제공자: {provider}")
     except Exception as e:

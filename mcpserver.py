@@ -7,6 +7,21 @@ from pydantic import ValidationError
 #나중에 모델 -> dict로 변경할거임(배포용은 프로젝트 구조 없어서 모델 사용 불가)
 from app.models.learning import LearningPagesRequest, PageUpdateRequest
 from app.models.database import DatabaseCreate, DatabaseUpdate
+from dotenv import load_dotenv
+import os
+import pathlib
+
+# 프로젝트 루트 디렉토리 찾기
+project_root = pathlib.Path(__file__).parent.absolute()
+env_path = project_root / ".env"
+
+# .env 파일 로드 시도
+load_dotenv(dotenv_path=env_path)
+
+# API 키 가져오기 (없으면 직접 설정할 수 있도록 None 반환)
+api_key = os.getenv("STUDYAI_API_KEY")
+if not api_key:
+    logging.warning("STUDYAI_API_KEY 환경 변수를 찾을 수 없습니다. API 기능이 제한될 수 있습니다.")
 
 # ───────────────────────기본 세팅 ───────────────────────
 log = logging.getLogger("mcp")
@@ -37,6 +52,8 @@ class Group(StrEnum):
     PAGE = "learning/pages"
     DB = "databases"
     WEB = "webhooks"
+    NOTION_SETTINGS = "notion_settings"
+    AUTH = "auth"
 
 # 각 endpoint에 대한 Action Map
 ACTION_MAP: dict[Group, dict[str, Route]] = {
@@ -61,6 +78,16 @@ ACTION_MAP: dict[Group, dict[str, Route]] = {
         "verify": {"method":"POST", "path":_const("/verify"), "needs_json":False},
         "retry": {"method":"POST", "path":_const("/retry"), "needs_json":False},
     },
+    Group.NOTION_SETTINGS: {
+        "workspaces": {"method":"GET", "path":_const("/workspaces"), "needs_json":False},
+        "set_active_workspace": {"method":"POST", "path":_const("/workspaces/active"), "needs_json":True},
+        "top_pages": {"method":"GET", "path":_const("/top-pages"), "needs_json":False},
+        "set_top_page": {"method":"GET", "path":_const("/set-top-page"), "needs_json":False},
+        "get_top_page": {"method":"GET", "path":_const("/get-top-page"), "needs_json":False},
+    },
+    Group.AUTH :{
+        "get_token" : {"method":"GET", "path":lambda p:f"/oauth/{p['provider']}", "needs_json":False},
+    }
 }
 
 PAYLOAD_MODEL = {
@@ -104,8 +131,84 @@ EXAMPLE_MAP: dict[str, str] = {
     "page_tool.get" : (
         "params.page_id 파라미터 넣을 시 특정 페이지 조회"
     ),
+    
+    # 워크스페이스 목록 조회
+    "notion_settings_tool.workspaces" : (
+        "파라미터 불필요: 사용 가능한 노션 워크스페이스 목록 조회"
+    ),
+    
+    # 활성 워크스페이스 설정
+    "notion_settings_tool.set_active_workspace" : (
+        "필수: workspace_id\n"
+        "{\"payload\":{\"workspace_id\":\"워크스페이스_아이디\"}}"
+    ),
+    
+    # 최상위 페이지 목록 조회
+    "notion_settings_tool.top_pages" : (
+        "파라미터 불필요: 현재 워크스페이스의 최상위 페이지 목록 조회"
+    ),
+    
+    # 최상위 페이지 설정
+    "notion_settings_tool.set_top_page" : (
+        "params.page_id: 최상위 페이지 id"
+    ),
+    
+    # 현재 최상위 페이지 조회
+    "notion_settings_tool.get_top_page" : (
+        "파라미터 불필요: 현재 설정된 최상위 페이지 조회"
+    ),
+    "auth_tool.get_token" : (
+        "params.provider: notion | github_webhook | notion_webhook\n"
+        "토큰 발급 링크 반환"
+    ),
 }
-
+USER_GUIDE : dict[str, str] = {
+    "default" : (
+        "이 MCP는 학습/프로젝트 관리 매니저 입니다.\n"
+        "현재 노션 DB·웹훅을 관리할 수 있습니다\n"
+        "또한, 필요한 API키를 간편하게 발급받고, 관리할 수 있습니다.\n"
+        "자세한 내용을 알고싶다면, 각 항목을 호출하세요"
+    ),
+    "Auth" : (
+        "API키를 관리합니다.\n"
+        "Notion/Github의 토큰을 발급/삭제 할 수 있습니다.\n"
+        "[토큰 발급]: API키를 발급합니다.\n"
+        "[토큰 삭제]: API키를 삭제합니다."
+    ),
+    "Notion_Settings" : (
+        "노션 설정을 관리합니다.\n"
+        "지금 활성화된 워크스페이스에서 다음 작업을 진행할 수 있습니다:\n"
+        "[워크스페이스 목록 조회]: 사용 가능한 노션 워크스페이스 목록 조회합니다.\n"
+        "[워크스페이스 설정]: 활성화된 워크스페이스를 설정합니다.\n"
+        "[최상위 페이지 설정]: 최상위 페이지를 설정합니다.\n"
+        "[최상위 페이지 조회]: 최상위 페이지를 조회합니다."
+    ),
+    "Database" : (
+        "학습 트래커 DB를 관리합니다.\n"
+        "사용자의 노션 토큰이 유효하다면, 활성화된 Workspace에서 다음 작업을 진행할 수 있습니다:\n"
+        "[데이터베이스 생성]: 새로운 학습 트래커 DB를 생성합니다.\n"
+        "[학습 페이지 작성]: AI 요약을 포함한 페이지를 생성합니다.\n"
+        "[현재 페이지 조회]: 최근 학습 중인 페이지 내용을 확인합니다.\n"
+        "[DB 활성화 전환]: 다른 데이터베이스로 전환하여 컨텍스트를 바꿉니다.\n"
+        "[AI 요약 요청]: 커밋 또는 코드 설명을 요약합니다."
+    ),
+    "Page" : (
+        "학습 페이지를 관리합니다.\n"
+        "지금 활성화된 워크스페이스에서 다음 작업을 진행할 수 있습니다:\n"
+        "[학습 페이지 생성]: AI 요약을 포함한 페이지를 생성합니다.\n"
+        "[학습 페이지 수정]: 페이지 내용을 수정합니다.\n"
+        "[학습 페이지 삭제]: 페이지를 삭제합니다.\n"
+        "[학습 페이지 조회]: 페이지 내용을 확인합니다."
+    ),
+    "Webhook" : (
+        "웹훅을 관리합니다.\n"
+        "지금 활성화된 워크스페이스에서 다음 작업을 진행할 수 있습니다:\n"
+        "[웹훅 시작]: 웹훅을 시작합니다.\n"
+        "[웹훅 중지]: 웹훅을 중지합니다.\n"
+        "[웹훅 확인]: 웹훅 상태를 확인합니다.\n"
+        "[웹훅 재시도]: 웹훅을 재시도합니다."
+    ),
+}
 ERROR_MSG = {
     400: "400 Bad Request",
     401: "401 Unauthorized",
@@ -155,6 +258,8 @@ async def dispatch(group: Group, action: str, params: dict) -> str:
     except ValueError as e:
         return str(e)
     
+    headers = {"Authorization": f"Bearer {api_key}"}
+    
     if spec["method"] in ('POST', 'PATCH', 'DELETE', 'PUT'):
         if not params.get("confirm"):
             return "사용자 승인 필요, 승인 시 같은 요청에 params.confirm 포함, 취소 시 무시"
@@ -166,7 +271,7 @@ async def dispatch(group: Group, action: str, params: dict) -> str:
     log.debug("→ %s %s", spec["method"], url)
 
     try:
-        res = await client.request(spec["method"], url, json=payload)
+        res = await client.request(spec["method"], url, json=payload, headers=headers)
         res.raise_for_status()
         if res.headers.get("content-type", "").startswith("application/json"):
             return res.json()
@@ -191,10 +296,22 @@ async def database_tool(action: str, params: dict[str, Any]) -> str:
 async def webhook_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.WEB, action, params)
 
+@mcp.tool(description="노션 설정 관련 액션 처리 (workspaces|set_active_workspace|top_pages|set_top_page|get_top_page)")
+async def notion_settings_tool(action: str, params: dict[str, Any]) -> str:
+    return await dispatch(Group.NOTION_SETTINGS, action, params)
+
+@mcp.tool(description="토큰 발급 액션 처리 (get_token)")
+async def auth_tool(action: str, params: dict[str, Any]) -> str:
+    return await dispatch(Group.AUTH, action, params)
+
 @mcp.tool(description="요청 예시(액션명.기능 -> 파라미터 형식 반환)")
 def helper(action: str) -> str:
     examples = EXAMPLE_MAP
     return examples.get(action, "지원 안 함")
+
+@mcp.tool(description="사용자 가이드 제공, params.action 파라미터 미입력시 default 가이드, 입력시(Databases|Page|Notion_Settings|Auth|Webhook) 해당 가이드 반환")
+def user_guide(action: str = "default") -> str:
+    return USER_GUIDE.get(action, "지원 안 함")
 
 # ───────────────────────초기 가이드 prompt ───────────────────────
 @mcp.prompt(name="Essential Guidelines", description="필수 지침 사항")
