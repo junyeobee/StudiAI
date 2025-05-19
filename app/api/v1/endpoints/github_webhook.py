@@ -119,7 +119,7 @@ async def handle_github_webhook(
 
         event_type = headers.get("X-GitHub-Event")
         if event_type == "push":
-            background_tasks.add_task(GithubWebhookHelper.process_github_push_event, payload, verified_row, supabase)
+            background_tasks.add_task(GithubWebhookHelper.process_github_push_event, payload, verified_row)
         # 다른 이벤트 타입들은 무시 / 추후 확장
 
         return {"status": "success"}

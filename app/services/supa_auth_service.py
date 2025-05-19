@@ -87,6 +87,7 @@ async def get_integration_by_id(user_id: str, provider: str, supabase: AsyncClie
     except Exception as e:
         api_logger.error(f"통합 정보 조회 실패: {str(e)}")
         raise DatabaseError(e)
+    
 
 async def save_integration_token(request:UserIntegration, supabase:AsyncClient) -> UserIntegrationResponse:
     """
