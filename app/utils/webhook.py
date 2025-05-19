@@ -4,7 +4,6 @@
 from datetime import datetime
 from typing import Optional
 from app.utils.logger import webhook_logger
-from app.core.config import settings
 
 def log_webhook_operation(
     db_id: str,

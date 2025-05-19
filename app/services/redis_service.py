@@ -15,7 +15,7 @@ class RedisService:
         try:
             return redis_client.set(f"user:{bearer_token}:id", user_id, ex = 3600)
         except Exception as e:
-            self.logger.warning(f"Redis 작업 중 오류 발생: {str(e)}")
+            self.logger.warning(f"Redis 오류 발생: {str(e)}")
             return False
     
     async def get_user_id(self, bearer_token: str, redis_client: redis.Redis) -> str:
@@ -30,7 +30,7 @@ class RedisService:
         except (redis.ConnectionError, redis.TimeoutError) as e:
             self.logger.warning(f"Redis 연결 실패: {str(e)}")
         except Exception as e:
-            self.logger.warning(f"Redis 작업 중 오류 발생: {str(e)}")
+            self.logger.warning(f"Redis 오류 발생: {str(e)}")
         return None
     
     @async_retry(max_retries=3)
@@ -65,24 +65,35 @@ class RedisService:
         """
         사용자 워크스페이스 정보를 Redis에서 가져옴
         """
-        print(f"user:{user_id}:workspace")
-        return redis_client.get(f"user:{user_id}:workspace")
+        try: 
+            return redis_client.get(f"user:{user_id}:workspace")
+        except Exception as e:
+            self.logger.error(f"사용자 워크스페이스 조회 실패: {str(e)}")
+            raise RedisError(f"워크스페이스 조회 실패: {str(e)}")
     
     async def set_user_workspace(self, user_id: str, workspace: str, redis_client: redis.Redis) -> bool:
         """
         사용자 워크스페이스 정보를 Redis에 저장
         """
-        return redis_client.set(f"user:{user_id}:workspace", workspace)
+        try: 
+            return redis_client.set(f"user:{user_id}:workspace", workspace)
+        except Exception as e:
+            self.logger.error(f"사용자 워크스페이스 저장 실패: {str(e)}")
+            raise RedisError(f"워크스페이스 저장 실패: {str(e)}")
     
     async def get_workspace_pages(self, workspace_id: str, redis_client: redis.Redis) -> list:
         """
         워크스페이스 페이지 정보를 Redis에서 가져옴
         """
-        data = redis_client.get(f"workspace:{workspace_id}:pages")
-        if data:
-            # JSON 문자열을 리스트로 변환
-            return json.loads(data)
-        return None
+        try: 
+            data = redis_client.get(f"workspace:{workspace_id}:pages")
+            if data:
+                # JSON 문자열을 리스트로 변환
+                return json.loads(data)
+            return None
+        except Exception as e:
+            self.logger.error(f"워크스페이스 페이지 조회 실패: {str(e)}")
+            raise RedisError(f"워크스페이스 페이지 조회 실패: {str(e)}")
     
     async def set_workspace_pages(self, workspace_id: str, pages: list, redis_client: redis.Redis) -> bool:
         """
@@ -90,19 +101,31 @@ class RedisService:
         """
         # 리스트를 JSON 문자열로 변환
         json_data = json.dumps(pages)
-        return redis_client.set(f"workspace:{workspace_id}:pages", json_data)
+        try: 
+            return redis_client.set(f"workspace:{workspace_id}:pages", json_data)
+        except Exception as e:
+            self.logger.error(f"워크스페이스 페이지 저장 실패: {str(e)}")
+            raise RedisError(f"워크스페이스 페이지 저장 실패: {str(e)}")
     
     async def set_default_page(self, workspace_id: str, page_id: str, redis_client: redis.Redis) -> bool:
         """
         워크스페이스의 기본 페이지 설정
         """
-        return redis_client.set(f"workspace:{workspace_id}:default_page", page_id)
+        try: 
+            return redis_client.set(f"workspace:{workspace_id}:default_page", page_id)
+        except Exception as e:
+            self.logger.error(f"워크스페이스 기본 페이지 설정 실패: {str(e)}")
+            raise RedisError(f"워크스페이스 기본 페이지 설정 실패: {str(e)}")
 
     async def get_default_page(self, workspace_id: str, redis_client: redis.Redis) -> str:
         """
         워크스페이스의 기본 페이지 가져오기
         """
-        return redis_client.get(f"workspace:{workspace_id}:default_page")
+        try: 
+            return redis_client.get(f"workspace:{workspace_id}:default_page")
+        except Exception as e:
+            self.logger.error(f"워크스페이스 기본 페이지 조회 실패: {str(e)}")
+            raise RedisError(f"워크스페이스 기본 페이지 조회 실패: {str(e)}")
     
     async def set_state_uuid(self, user_id: str, redis_client: redis.Redis, expire_seconds: int = 180) -> str:
         """

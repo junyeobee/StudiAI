@@ -52,3 +52,9 @@ api_router.include_router(
     tags=["github_webhook"]
 )
 
+public_router.include_router(
+    github_webhook.public_router,
+    prefix="/github_webhook_public",
+    tags=["github_webhook_public"]
+)
+

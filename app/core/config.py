@@ -21,10 +21,10 @@ class Settings(BaseSettings):
     CORS_ORIGINS: List[str] = ["*"]
     
     # Notion API 설정
-    NOTION_API_KEY: str
     NOTION_API_VERSION: str = "2022-06-28"
     NOTION_CLIENT_ID: str
     NOTION_CLIENT_SECRET: str
+
     # Supabase 설정
     SUPABASE_URL: str
     SUPABASE_KEY: str
@@ -38,6 +38,7 @@ class Settings(BaseSettings):
     REDIS_PORT: str
     REDIS_PASSWORD: str
 
+    # GitHub OAuth
     GITHUB_CLIENT_ID : str
     GITHUB_SECRET_KEY : str
     
@@ -45,6 +46,8 @@ class Settings(BaseSettings):
     SECRET_KEY: str
     
     ENCRYPTION_KEY: str
+
+    WEBHOOK_SECRET_KEY : str
 
     API_BASE_URL:str
 
