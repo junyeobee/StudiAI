@@ -121,9 +121,6 @@ async def handle_github_webhook(
                 .eq("repo_name", repo) \
                 .eq("status", "active") \
                 .execute()
-
-        print("테스트 difftestasdfasdfasdfa")
-
         rows = res.data
         if not rows:
             return {"status": "success"}
