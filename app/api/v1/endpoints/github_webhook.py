@@ -120,7 +120,9 @@ async def handle_github_webhook(
                 .eq("repo_name", repo) \
                 .eq("status", "active") \
                 .execute()
-        
+
+        print("테스트 diff")
+
         rows = res.data
         if not rows:
             return {"status": "success"}
@@ -145,7 +147,10 @@ async def handle_github_webhook(
                 github_service = GitHubWebhookService(token=decrypted_pat)
                 for b in code_bundle:
                     commit_detail = await github_service.fetch_commit_detail(owner, repo, b["sha"])
-                    print(commit_detail)    
+                    for file in commit_detail["files"]:
+                        if file["status"] == "modified":
+                            print(file["filename"])
+                            print(file["patch"])
             case _:
                 pass
             
