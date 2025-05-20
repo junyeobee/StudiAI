@@ -114,7 +114,12 @@ async def handle_github_webhook(
         owner, repo = repo_full.split("/", 1)
 
         # 2) 해당 repo 의 활성 웹훅 rows 조회
-        res = await supabase.table("db_webhooks").select("secret,learning_db_id").eq("repo_owner", owner).eq("repo_name", repo).eq("status", "active").execute()
+        res = await supabase.table("db_webhooks") \
+                .select("secret, learning_db_id, created_by") \
+                .eq("repo_owner", owner) \
+                .eq("repo_name", repo) \
+                .eq("status", "active") \
+                .execute()
         rows = res.data
         if not rows:
             return {"status": "success"}
@@ -135,11 +140,11 @@ async def handle_github_webhook(
         match event_type :
             case "push":
                 code_bundle = await GithubWebhookHelper.process_github_push_event(payload)
-                decrypted_pat = await get_integration_token(verified_row["user_id"], "github", supabase)
+                decrypted_pat = await get_integration_token(verified_row["created_by"], "github", supabase)
                 github_service = GitHubWebhookService(token=decrypted_pat)
                 for b in code_bundle:
                     commit_detail = await github_service.fetch_commit_detail(owner, repo, b["sha"])
-                    print(commit_detail)
+                    print(commit_detail)    
             case _:
                 pass
             
