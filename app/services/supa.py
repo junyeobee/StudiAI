@@ -601,3 +601,21 @@ async def set_workspaces(workspaces: list[UserWorkspace], supabase: AsyncClient)
     except Exception as e:
         api_logger.error(f"워크스페이스 설정 실패: {str(e)}")
         raise e
+    
+async def get_github_pat(db_id, supabase):
+    res = await supabase.table("user_integrations")\
+        .select("access_token")\
+        .eq("provider","github").single().execute()
+    return res.data["access_token"]
+
+
+async def get_active_webhooks(owner: str, repo: str, supabase: AsyncClient):
+    """활성 웹훅 정보 조회"""
+    res = await supabase.table("db_webhooks") \
+        .select("secret, learning_db_id, created_by") \
+        .eq("repo_owner", owner) \
+        .eq("repo_name", repo) \
+        .eq("status", "active") \
+        .execute()
+        
+    return res
