@@ -66,6 +66,30 @@ class GithubWebhookHelper:
             return bundles        # 커밋 여러 개면 리스트 반환
         except Exception as e:
             print(f"푸시 이벤트 처리 중 오류: {str(e)}")
+
+    @staticmethod
+    async def strip_patch(patch: str) -> str:
+        """
+        diff → 수정된 코드만 남기고
+        1) 메타줄 (diff/index/---/+++/@@) 제거
+        2) + / - 접두어 제거
+        3) 앞뒤 공백·탭 제거
+        4) 완전히 빈 줄도 제거
+        """
+        cleaned = []
+        for line in patch.splitlines():
+            # ① 메타 줄 건너뛰기
+            if line.startswith(("diff ", "index ", "--- ", "+++ ", "@@")):
+                continue
+            # ② + / - 접두어 제거
+            if line[:1] in "+-":
+                line = line[1:]
+            # ③ 좌우 공백·탭 제거
+            line = line.strip()
+            # ④ 빈 줄 버리기
+            if line:
+                cleaned.append(line)
+        return "\n".join(cleaned)
         
 
     
