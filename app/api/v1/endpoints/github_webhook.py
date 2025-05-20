@@ -149,10 +149,10 @@ async def handle_github_webhook(
                     for file in commit_detail["files"]:
                         if file["status"] == "modified":
                             print(file["filename"])
-                            print(re.sub(r"(?m)^(\d*\+|\+)\s+", "", file["patch"]))
+                            print(re.sub(r"(?m)^(\d*\+|\+)\s+|\t", "", file["patch"]))
                         if file["status"] == "added":
                             print(file["filename"])
-                            print(re.sub(r"(?m)^(\d*\+|\+)\s+", "", file["patch"]))
+                            print(re.sub(r"(?m)^(\d*\+|\+)\s+|\t", "", file["patch"]))
 
                         
             case _:
