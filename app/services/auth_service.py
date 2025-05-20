@@ -203,7 +203,6 @@ async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient
         res = await get_integration_by_id(user_id, provider, supabase)   
         if not res:
             raise Exception("통합 정보 조회 실패")
-        print(f'res: {res}')
         # 암호화 키와 저장된 IV 가져오기
         encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
         iv = base64.b64decode(res["token_iv"])
@@ -216,7 +215,6 @@ async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient
         # 복호화
         cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
         decrypted_token = cipher.decrypt_and_verify(encrypted_token, tag).decode('utf-8')
-        print(f'decrypted_token: {decrypted_token}')
         return decrypted_token
         
     except Exception as e:
