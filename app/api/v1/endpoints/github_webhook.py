@@ -12,6 +12,7 @@ import json
 import hmac
 import hashlib
 from app.services.auth_service import get_integration_token
+import re
 
 router = APIRouter()
 public_router = APIRouter()
@@ -150,10 +151,12 @@ async def handle_github_webhook(
                     for file in commit_detail["files"]:
                         if file["status"] == "modified":
                             print(file["filename"])
-                            print(file["patch"])
+                            print(re.sub(r"^[0-9]+", "", file["patch"]))
                         if file["status"] == "added":
                             print(file["filename"])
-                            print(file["patch"])
+                            print(re.sub(r"^[0-9]+", "", file["patch"]))
+
+                        
             case _:
                 pass
             
