@@ -144,6 +144,7 @@ async def handle_github_webhook(
         match event_type :
             case "push":
                 code_bundle = await GithubWebhookHelper.process_github_push_event(payload)
+                
                 decrypted_pat = await get_integration_token(verified_row["created_by"], "github", supabase)
                 github_service = GitHubWebhookService(token=decrypted_pat)
                 for b in code_bundle:
@@ -151,10 +152,10 @@ async def handle_github_webhook(
                     for file in commit_detail["files"]:
                         if file["status"] == "modified":
                             print(file["filename"])
-                            print(re.sub(r"^[0-9]+", "", file["patch"]))
+                            print(re.sub(r"^[0-9]*\+\s+", "", file["patch"]))
                         if file["status"] == "added":
                             print(file["filename"])
-                            print(re.sub(r"^[0-9]+", "", file["patch"]))
+                            print(re.sub(r"^[0-9]*\+\s+", "", file["patch"]))
 
                         
             case _:
