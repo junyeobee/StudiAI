@@ -121,7 +121,7 @@ async def handle_github_webhook(
                 .eq("status", "active") \
                 .execute()
 
-        print("테스트 diff")
+        print("테스트 difftest")
 
         rows = res.data
         if not rows:
