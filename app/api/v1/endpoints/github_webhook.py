@@ -147,13 +147,8 @@ async def handle_github_webhook(
                 for b in code_bundle:
                     commit_detail = await github_service.fetch_commit_detail(owner, repo, b["sha"])
                     for file in commit_detail["files"]:
-                        clean = re.sub(
-                            r"(?m)^(@@.*?$|[\+\-]\s?|diff --git.*$|index .*|--- .*|\+\+\+ .*)",
-                            "",
-                            file["patch"]
-                        ).rstrip()
+                        clean = strip_patch(file["patch"])
                         print(clean)
-                        
             case _:
                 pass
             
@@ -166,3 +161,26 @@ async def handle_github_webhook(
         api_logger.error(f"웹훅 처리 실패: {e}")
         # GitHub 재시도 방지를 위해 200 계열 응답 유지
         return {"status": "success"}
+
+def strip_patch(patch: str) -> str:
+    """
+    diff → 수정된 코드만 남기고
+    1) 메타줄 (diff/index/---/+++/@@) 제거
+    2) + / - 접두어 제거
+    3) 앞뒤 공백·탭 제거
+    4) 완전히 빈 줄도 제거
+    """
+    cleaned = []
+    for line in patch.splitlines():
+        # ① 메타 줄 건너뛰기
+        if line.startswith(("diff ", "index ", "--- ", "+++ ", "@@")):
+            continue
+        # ② + / - 접두어 제거
+        if line[:1] in "+-":
+            line = line[1:]
+        # ③ 좌우 공백·탭 제거
+        line = line.strip()
+        # ④ 빈 줄 버리기
+        if line:
+            cleaned.append(line)
+    return "\n".join(cleaned)
