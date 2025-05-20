@@ -147,15 +147,13 @@ async def handle_github_webhook(
                 for b in code_bundle:
                     commit_detail = await github_service.fetch_commit_detail(owner, repo, b["sha"])
                     for file in commit_detail["files"]:
-                        lines = []
-                        for line in file["patch"].splitlines():
-                            if line.startswith(("@@", "diff ", "index ", "--- ", "+++ ")):
-                                continue                 # 메타 제거
-                            if line.startswith(("+", "-")):
-                                line = line[1:]          # +/-
-                            lines.append(line.lstrip("\t"))  # 탭 제거
-                        clean = "\n".join(lines).rstrip()
-                        print(clean)    
+                        clean = re.sub(
+                            r"(?m)^(@@.*?$|[\+\-]\s?|diff --git.*$|index .*|--- .*|\+\+\+ .*)",
+                            "",
+                            file["patch"]
+                        ).rstrip()
+                        print(clean)
+                        
             case _:
                 pass
             
