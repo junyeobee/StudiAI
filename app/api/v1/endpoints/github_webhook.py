@@ -151,6 +151,9 @@ async def handle_github_webhook(
                         if file["status"] == "modified":
                             print(file["filename"])
                             print(file["patch"])
+                        if file["status"] == "added":
+                            print(file["filename"])
+                            print(file["patch"])
             case _:
                 pass
             
