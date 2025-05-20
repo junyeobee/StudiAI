@@ -89,7 +89,7 @@ class GithubWebhookHelper:
             # ④ 빈 줄 버리기
             if line:
                 cleaned.append(line)
-        return "\n".join(cleaned)
+        return "".join(cleaned)
         
 
     
