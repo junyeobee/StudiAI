@@ -24,12 +24,6 @@ router = APIRouter()
 public_router = APIRouter()
 redis_service = RedisService()
 
-# 임시 저장소 (실제로는 Redis 사용 예정)
-temp_state_store = {
-    "user_id": "ㅁㄴㅇㄹ",
-    "uuid": "fixed-state-uuid-12345"
-}
-
 @public_router.post("/keys", response_model=ApiKeyResponse)
 async def create_api_key(
     user_id: str,

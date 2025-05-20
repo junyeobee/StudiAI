@@ -5,7 +5,7 @@ import secrets
 from app.core.config import settings
 from typing import Tuple, Optional
 import re
-
+import httpx
 class GithubWebhookHelper:
     @staticmethod
     async def parse_github_repo_url(repo_url: str) -> Tuple[Optional[str], Optional[str]]:
@@ -46,30 +46,26 @@ class GithubWebhookHelper:
         """웹훅 HMAC 서명용 랜덤 시크릿 생성"""
         return secrets.token_hex(20)   # 40-char hex
     
-    async def process_github_push_event(payload: dict, webhook: dict):
-        """GitHub 푸시 이벤트 처리 함수 (단순 로깅만 수행)"""
+    @staticmethod
+    async def process_github_push_event(payload: dict):
+        """Github 커밋 정보 추출"""
         try:
-            # 웹훅 정보 추출
-            learning_db_id = webhook.get("learning_db_id")
-            
-            # 커밋 정보 출력
-            print("===== GitHub 푸시 이벤트 처리 =====")
-            print(f"학습 DB ID: {learning_db_id}")
-            
-            # 커밋 정보 추출 및 출력
             commits = payload.get("commits", [])
-            print(f"커밋 수: {len(commits)}")
-            
-            for i, commit in enumerate(commits):
-                print(f"\n커밋 #{i+1}:")
-                print(f"ID: {commit.get('id')}")
-                print(f"메시지: {commit.get('message')}")
-                print(f"작성자: {commit.get('author', {}).get('name')}")
-                print(f"추가 파일: {commit.get('added', [])}")
-                print(f"수정 파일: {commit.get('modified', [])}")
-                print(f"삭제 파일: {commit.get('removed', [])}")
-            
-            print("===== 푸시 이벤트 처리 완료 =====")
-            
+            bundles = []
+            for c in commits:
+                bundles.append({
+                    "sha": c["id"],
+                    "message": c["message"],
+                    "author": c["author"]["name"],
+                    "files": {
+                        "added":    c.get("added", []),
+                        "modified": c.get("modified", []),
+                        "removed":  c.get("removed", [])
+                    }
+                })
+            return bundles        # 커밋 여러 개면 리스트 반환
         except Exception as e:
             print(f"푸시 이벤트 처리 중 오류: {str(e)}")
+        
+
+    

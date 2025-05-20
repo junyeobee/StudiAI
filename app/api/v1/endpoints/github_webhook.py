@@ -11,6 +11,7 @@ from app.utils.github_webhook_helper import GithubWebhookHelper
 import json
 import hmac
 import hashlib
+from app.services.auth_service import get_integration_token
 
 router = APIRouter()
 public_router = APIRouter()
@@ -36,6 +37,7 @@ async def create_webhook(
 
         # 2) secret 생성 & 웹훅 등록
         raw_secret = await GithubWebhookHelper.generate_secret()
+        # 처리해야할 것 : 웹훅 존재할 시, 웹훅 있다고 알림
         callback_url = f"{settings.API_BASE_URL}/github_webhook_public/webhook_operation"
         webhook_data = await github_service.create_webhook(
             repo_owner=repo_owner,
@@ -76,6 +78,17 @@ async def create_webhook(
         raise
     except Exception as e:
         api_logger.error(f"웹훅 생성 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/repos")
+async def get_repo_list(
+    github_service: GitHubWebhookService = Depends(get_github_webhook_service)
+):
+    """GitHub 저장소 목록 조회"""
+    try:
+        res = await github_service.list_repositories()
+        return res
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -118,9 +131,18 @@ async def handle_github_webhook(
             raise HTTPException(401, "Invalid signature")
 
         event_type = headers.get("X-GitHub-Event")
-        if event_type == "push":
-            background_tasks.add_task(GithubWebhookHelper.process_github_push_event, payload, verified_row)
-        # 다른 이벤트 타입들은 무시 / 추후 확장
+        
+        match event_type :
+            case "push":
+                code_bundle = await GithubWebhookHelper.process_github_push_event(payload)
+                decrypted_pat = await get_integration_token(verified_row["user_id"], "github", supabase)
+                github_service = GitHubWebhookService(token=decrypted_pat)
+                for b in code_bundle:
+                    commit_detail = await github_service.fetch_commit_detail(owner, repo, b["sha"])
+                    print(commit_detail)
+            case _:
+                pass
+            
 
         return {"status": "success"}
 
@@ -130,15 +152,3 @@ async def handle_github_webhook(
         api_logger.error(f"웹훅 처리 실패: {e}")
         # GitHub 재시도 방지를 위해 200 계열 응답 유지
         return {"status": "success"}
-
-
-@router.get("/repos")
-async def get_repo_list(
-    github_service: GitHubWebhookService = Depends(get_github_webhook_service)
-):
-    """GitHub 저장소 목록 조회"""
-    try:
-        res = await github_service.list_repositories()
-        return res
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

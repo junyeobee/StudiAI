@@ -123,3 +123,16 @@ class GitHubWebhookService:
         except Exception as e:
             api_logger.error(f"GitHub 웹훅 삭제 실패: {str(e)}")
             raise GithubAPIError(f"웹훅 삭제 실패: {str(e)}")
+        
+    @async_retry(max_retries=3, delay=1.0, backoff=2.0)
+    async def fetch_commit_detail(self, owner, repo, sha):
+        url = f"https://api.github.com/repos/{owner}/{repo}/commits/{sha}"
+        headers = {"Authorization": f"token {self.token}", "Accept": "application/vnd.github.v3+json"}
+        try : 
+            async with httpx.AsyncClient() as client:
+                resp = await client.get(url, headers=headers, timeout=15)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as e:
+            api_logger.error(f"GitHub 커밋 상세 조회 실패: {str(e)}")
+            raise GithubAPIError(f"커밋 상세 조회 실패: {str(e)}")
