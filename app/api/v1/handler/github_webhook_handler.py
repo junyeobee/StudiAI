@@ -229,7 +229,7 @@ class GitHubWebhookHandler:
     
     async def _start_queue_worker(self, analysis_service: CodeAnalysisService):
         """분석 큐 처리 워커 시작 (타임아웃 포함)"""
-        await analysis_service.process_queue(timeout=300)  # 5분 타임아웃
+        await analysis_service.process_queue()  # 5분 타임아웃
     
     async def _analyze_commit(self, github_service: GitHubWebhookService, analysis_service: CodeAnalysisService, 
                              owner: str, repo: str, commit_sha: str, user_id: str):
