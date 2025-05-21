@@ -249,7 +249,8 @@ class CodeAnalysisService:
         api_logger.info("코드 분석 큐 처리 시작")
         while True:
             item = await self.queue.get()
-            print(item)
+            if not item :
+                return "item is None"
             try:
                 api_logger.info(f"코드 분석 처리: {item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']}")
                 
