@@ -249,6 +249,7 @@ class CodeAnalysisService:
         api_logger.info("코드 분석 큐 처리 시작")
         while True:
             item = await self.queue.get()
+            print(item)
             try:
                 api_logger.info(f"코드 분석 처리: {item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']}")
                 
@@ -399,8 +400,8 @@ class CodeAnalysisService:
         # OpenAI API 파라미터 준비
         prompt = self._prepare_llm_prompt(code, metadata, None, filename)
         
-        # TODO: 실제 OpenAI API 호출 구현
-        # 임시 구현 (실제 API 호출로 대체 필요)
+        # openai한테 api 요청, prompt전달.
+        # 응답 받은 결과를 전달.
         if 'block_name' in metadata:
             result = f"코드 분석 결과: {metadata['block_name']} in {filename}"
         else:
