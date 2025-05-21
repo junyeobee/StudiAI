@@ -11,6 +11,7 @@ from app.utils.logger import api_logger
 import json
 import hmac
 import hashlib
+import asyncio
 
 class GitHubWebhookHandler:
     """GitHub 웹훅 처리를 담당하는 핸들러 클래스"""
@@ -102,6 +103,9 @@ class GitHubWebhookHandler:
         # 3. 분석 서비스 초기화 및 백그라운드 작업 등록
         analysis_service = CodeAnalysisService(self.redis_client, self.supabase)
         
+        # 3.1 참조 파일 가져오기 서비스 핸들러 등록
+        self._register_reference_file_handler(github_service, owner, repo, verified_row["created_by"])
+        
         # 4. 큐 처리 워커 시작 (백그라운드)
         background_tasks.add_task(self._start_queue_worker, analysis_service)
         
@@ -116,6 +120,70 @@ class GitHubWebhookHandler:
                 commit_sha=commit["sha"],
                 user_id=verified_row["created_by"]
             )
+            
+    def _register_reference_file_handler(self, github_service: GitHubWebhookService, owner: str, repo: str, user_id: str):
+        """참조 파일 가져오기 서비스 등록"""
+        # 레디스에 참조 파일 요청을 처리할 콜백 등록
+        # 이 메서드는 CodeAnalysisService에서 참조 파일 로드 시 호출될 수 있도록 설계
+        
+        async def fetch_reference_file_callback(channel, message):
+            """참조 파일 요청 콜백"""
+            try:
+                # 메시지 파싱
+                request_data = json.loads(message.decode('utf-8'))
+                reference_path = request_data.get('path')
+                commit_sha = request_data.get('commit_sha', 'HEAD')
+                callback_channel = request_data.get('callback_channel')
+                
+                if not reference_path or not callback_channel:
+                    return
+                
+                # GitHub API로 파일 가져오기
+                try:
+                    file_content = await github_service.fetch_file_content(
+                        owner=owner,
+                        repo=repo,
+                        path=reference_path,
+                        ref=commit_sha
+                    )
+                    
+                    # 응답 구성
+                    response = {
+                        'path': reference_path,
+                        'content': file_content,
+                        'status': 'success'
+                    }
+                except Exception as e:
+                    response = {
+                        'path': reference_path,
+                        'error': str(e),
+                        'status': 'error'
+                    }
+                
+                # 콜백 채널로 결과 전송
+                await self.redis_client.publish(callback_channel, json.dumps(response))
+                
+            except Exception as e:
+                api_logger.error(f"참조 파일 처리 오류: {str(e)}")
+        
+        # Redis PubSub 구독 설정
+        reference_channel = f"ref_request:{owner}:{repo}:{user_id}"
+        
+        # 비동기로 Redis 채널 구독
+        async def subscribe_to_channel():
+            pubsub = self.redis_client.pubsub()
+            await pubsub.subscribe(reference_channel)
+            try:
+                async for message in pubsub.listen():
+                    if message['type'] == 'message':
+                        await fetch_reference_file_callback(reference_channel, message['data'])
+            except Exception as e:
+                api_logger.error(f"Redis 구독 오류: {str(e)}")
+            finally:
+                await pubsub.unsubscribe(reference_channel)
+        
+        # 백그라운드 태스크로 구독 시작 (별도 실행 필요)
+        asyncio.create_task(subscribe_to_channel())
     
     async def _start_queue_worker(self, analysis_service: CodeAnalysisService):
         """분석 큐 처리 워커 시작"""
@@ -128,9 +196,36 @@ class GitHubWebhookHandler:
             # 커밋 상세 정보 조회
             commit_detail = await github_service.fetch_commit_detail(owner, repo, commit_sha)
             
+            # 수정된 파일들에 대해 전체 내용 가져오기
+            files = commit_detail.get("files", [])
+            for file in files:
+                status = file.get("status", "")
+                filename = file.get("filename", "")
+                
+                # 파일이 수정된 경우에만 전체 내용 가져오기 필요
+                if status == "modified" and "patch" in file:
+                    try:
+                        # GraphQL로 파일 전체 내용 가져오기
+                        file_content = await github_service.fetch_file_content(
+                            owner=owner,
+                            repo=repo,
+                            path=filename,
+                            ref=commit_sha
+                        )
+                        
+                        # 전체 파일 내용 추가
+                        file["full_content"] = file_content
+                        api_logger.info(f"파일 '{filename}' 전체 내용 가져옴 (길이: {len(file_content)})")
+                    except Exception as e:
+                        api_logger.error(f"파일 '{filename}' 전체 내용 가져오기 실패: {str(e)}")
+                
+                # 추가된 파일의 경우 patch가 전체 내용이므로 full_content 별도 설정
+                elif status == "added" and "patch" in file:
+                    file["full_content"] = file["patch"]
+            
             # 코드 변경 분석
             await analysis_service.analyze_code_changes(
-                files=commit_detail["files"],
+                files=files,
                 owner=owner,
                 repo=repo,
                 commit_sha=commit_sha,

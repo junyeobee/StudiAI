@@ -4,6 +4,8 @@ from typing import Dict, List, Any
 from app.utils.logger import api_logger
 import asyncio
 import re
+import json
+import time
 
 class CodeAnalysisService:
     """코드 분석 및 LLM 처리를 담당하는 서비스"""
@@ -17,13 +19,22 @@ class CodeAnalysisService:
         api_logger.info(f"분석할 파일 수: {len(files)}")
         tasks = []
         for file in files:
-            if "patch" not in file:
+            # 패치 또는 전체 내용이 없으면 건너뛰기
+            if "patch" not in file and "full_content" not in file:
                 continue
                 
-            clean_code = self._strip_patch(file["patch"])
-            api_logger.info(f"파일 '{file['filename']}' 분석 큐에 추가")
+            # 전체 파일 내용이 있으면 우선 사용, 없으면 패치 사용
+            if "full_content" in file:
+                # 전체 파일 내용 사용
+                code_to_analyze = file["full_content"]
+                api_logger.info(f"파일 '{file['filename']}' 전체 내용 분석")
+            else:
+                # 패치에서 실제 코드만 추출
+                code_to_analyze = self._strip_patch(file["patch"])
+                api_logger.info(f"파일 '{file['filename']}' 패치 내용 분석")
+                
             tasks.append(self._enqueue_code_analysis(
-                clean_code, 
+                code_to_analyze, 
                 file["filename"], 
                 commit_sha, 
                 user_id
@@ -74,17 +85,105 @@ class CodeAnalysisService:
             api_logger.info(f"'{filename}' 청크 {i+1}/{len(chunks)} 큐에 추가됨")
     
     def _split_code_if_needed(self, code: str) -> List[str]:
-        """코드가 너무 길면 여러 청크로 분할"""
-        # 임시로 단순 구현 - 실제로는 토큰 수나 함수/클래스 단위로 분할 필요
-        max_length = 3000  # 예시 길이 제한
+        """코드가 너무 길면 여러 청크로 분할
+        
+        1. 함수/클래스 단위로 분할
+        2. 개별 함수/클래스가 길면 여러 청크로 재분할
+        3. 청크 간 연속성을 위한 메타데이터 포함
+        """
+        max_length = 3000  # 청크 최대 길이
         
         if len(code) <= max_length:
             return [code]
             
-        # 단순하게 청크 단위로 분할 (실제로는 더 정교한 로직 필요)
+        # 코드 블록(함수/클래스) 패턴 (다중 언어 지원)
+        # Python, JavaScript, TypeScript, Java, C#, C++, PHP 등 대부분의 언어에서 작동
+        block_patterns = [
+            # 함수 패턴 (def, function, public/private void 등)
+            r'((?:def|function|async function|public|private|protected|static|void|int|string|bool|final)\s+\w+\s*\([^)]*\)\s*(?:\{|:)(?:.|\n)*?)(?=\n\s*(?:def|function|class|public|private|protected|static|void|int|string|bool|final)\s+|\Z)',
+            # 클래스 패턴
+            r'((?:class|interface|abstract class|struct)\s+\w+(?:\s+(?:extends|implements)\s+[^{]+)?\s*\{(?:.|\n)*?)(?=\n\s*(?:def|function|class|interface|abstract|public|private)\s+|\Z)'
+        ]
+        
+        # 코드 블록 추출
+        blocks = []
+        remaining_code = code
+        
+        for pattern in block_patterns:
+            matches = re.finditer(pattern, remaining_code, re.MULTILINE)
+            for match in matches:
+                blocks.append({
+                    'code': match.group(0),
+                    'start': match.start(),
+                    'end': match.end(),
+                    'type': 'function' if not match.group(0).strip().startswith(('class', 'interface', 'abstract class', 'struct')) else 'class'
+                })
+        
+        # 시작 위치에 따라 블록 정렬
+        blocks.sort(key=lambda x: x['start'])
+        
+        # 함수/클래스로 매칭되지 않은 코드 처리 (임포트, 주석, 전역 변수 등)
+        if not blocks:
+            # 매칭된 블록이 없으면 단순 길이 기반 분할
+            return [code[i:i+max_length] for i in range(0, len(code), max_length)]
+        
+        # 블록 사이의 코드도 포함시키기
+        complete_blocks = []
+        last_end = 0
+        
+        for block in blocks:
+            if block['start'] > last_end:
+                # 블록 사이의 코드가 있으면 별도 블록으로 추가
+                complete_blocks.append({
+                    'code': remaining_code[last_end:block['start']],
+                    'type': 'other'
+                })
+            complete_blocks.append(block)
+            last_end = block['end']
+        
+        # 마지막 블록 이후 코드가 있으면 추가
+        if last_end < len(remaining_code):
+            complete_blocks.append({
+                'code': remaining_code[last_end:],
+                'type': 'other'
+            })
+        
+        # 각 블록을 적절한 크기로 분할하고 메타데이터 추가
         chunks = []
-        for i in range(0, len(code), max_length):
-            chunks.append(code[i:i+max_length])
+        for block in complete_blocks:
+            block_code = block['code']
+            
+            # 블록이 max_length보다 작으면 바로 추가
+            if len(block_code) <= max_length:
+                chunks.append(block_code)
+                continue
+            
+            # 블록 이름 추출 (함수/클래스명)
+            block_name = "unknown"
+            if block['type'] in ['function', 'class']:
+                name_match = re.search(r'(?:def|function|class|interface|public|private|protected|static|void|int|string|bool)\s+(\w+)', block_code)
+                if name_match:
+                    block_name = name_match.group(1)
+            
+            # 블록을 여러 청크로 분할
+            block_chunks = []
+            for i in range(0, len(block_code), max_length):
+                chunk = block_code[i:i+max_length]
+                
+                # 첫 번째 청크가 아니면 이전 청크와의 연결성을 위한 메타데이터 추가
+                if i > 0:
+                    # 이전 청크 요약 참조를 위한 주석 추가
+                    summary_reference = f"# {block['type']} {block_name}[청크 {i//max_length}] - 이전 청크에서 계속됨\n"
+                    chunk = summary_reference + chunk
+                
+                # 마지막 청크가 아니면 계속된다는 표시 추가
+                if i + max_length < len(block_code):
+                    continuation_note = f"\n# {block['type']} {block_name} - 다음 청크에서 계속됨"
+                    chunk = chunk + continuation_note
+                
+                block_chunks.append(chunk)
+            
+            chunks.extend(block_chunks)
         
         return chunks
     
@@ -94,9 +193,32 @@ class CodeAnalysisService:
         
         # 주석에서 메타데이터 추출 로직
         lines = code.split('\n')
-        for line in lines:
+        for i, line in enumerate(lines):
             line = line.strip()
             if line.startswith('#'):
+                # 청크 연속성 메타데이터 처리
+                chunk_continuation = re.search(r'(function|class)\s+(\w+)\[청크\s+(\d+)\]\s*-\s*이전\s+청크에서\s+계속됨', line)
+                if chunk_continuation:
+                    block_type = chunk_continuation.group(1)
+                    block_name = chunk_continuation.group(2)
+                    chunk_index = int(chunk_continuation.group(3))
+                    metadata['is_continuation'] = True
+                    metadata['block_type'] = block_type
+                    metadata['block_name'] = block_name
+                    metadata['previous_chunk'] = chunk_index - 1
+                    # 첫 번째 주석이 연속성 표시면 다음 주석으로 넘어감
+                    continue
+                
+                # 다음 청크로 계속됨 표시 처리
+                next_chunk = re.search(r'(function|class)\s+(\w+)\s*-\s*다음\s+청크에서\s+계속됨', line)
+                if next_chunk:
+                    block_type = next_chunk.group(1)
+                    block_name = next_chunk.group(2)
+                    metadata['has_next_chunk'] = True
+                    metadata['block_type'] = block_type
+                    metadata['block_name'] = block_name
+                    continue
+                
                 # [파일경로] 형식 추출
                 if '[' in line and ']' in line:
                     match = re.search(r'\[(.*?)\]', line)
@@ -117,7 +239,7 @@ class CodeAnalysisService:
                 
                 # 일반 주석 텍스트
                 metadata['comment'] = line.lstrip('#').strip()
-                # 첫 번째 주석만 처리하고 중단
+                # 첫 번째 일반 주석만 처리하고 중단 (연속성 표시는 제외)
                 break
         
         return metadata
@@ -129,6 +251,10 @@ class CodeAnalysisService:
             item = await self.queue.get()
             try:
                 api_logger.info(f"코드 분석 처리: {item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']}")
+                
+                # 참조 파일 가져오기 (필요한 경우)
+                await self._fetch_reference_files(item)
+                
                 # LLM API 호출 및 결과 저장
                 result = await self._call_llm_api(item)
                 await self._store_analysis_result(item, result)
@@ -137,22 +263,275 @@ class CodeAnalysisService:
             finally:
                 self.queue.task_done()
     
-
-    # 여기 안됨.
+    async def _fetch_reference_files(self, item: Dict):
+        """메타데이터에서 참조 파일 정보 추출 및 가져오기"""
+        metadata = item.get('metadata', {})
+        
+        # 참조 파일 정보가 없으면 처리 필요 없음
+        if 'reference_file' not in metadata:
+            return
+            
+        # Redis에서 이미 가져온 참조 파일인지 확인
+        reference_path = metadata['reference_file']
+        user_id = item['user_id']
+        commit_sha = item['commit_sha']
+        
+        cache_key = f"{user_id}:ref:{reference_path}:{commit_sha}"
+        cached_content = await self.redis_client.get(cache_key)
+        
+        if cached_content:
+            # 캐시에서 참조 파일 내용 가져오기
+            metadata['reference_content'] = cached_content.decode('utf-8')
+            api_logger.info(f"참조 파일 '{reference_path}' 캐시에서 로드됨")
+            return
+            
+        try:
+            # Redis PubSub을 통해 참조 파일 요청
+            # webhook_handler에 등록된 핸들러가 이 요청을 처리함
+            owner_repo = None
+            if '/' in reference_path:
+                parts = reference_path.split('/')
+                if len(parts) >= 2:
+                    # 경로에서 owner/repo 부분 추출 시도
+                    owner_repo = '/'.join(parts[:2])
+            
+            # 콜백 채널 설정 (고유한 ID 사용)
+            callback_id = f"{user_id}:{commit_sha}:{item['chunk_index']}"
+            callback_channel = f"ref_response:{callback_id}"
+            
+            # 참조 파일 요청 메시지 구성
+            request_data = {
+                'path': reference_path,
+                'commit_sha': commit_sha,
+                'callback_channel': callback_channel
+            }
+            
+            # 참조 파일 요청 발행
+            request_channel = f"ref_request:{owner_repo or 'unknown'}:{user_id}"
+            await self.redis_client.publish(request_channel, json.dumps(request_data))
+            api_logger.info(f"참조 파일 '{reference_path}' 요청 발행됨")
+            
+            # 응답 대기 (최대 5초)
+            pubsub = self.redis_client.pubsub()
+            await pubsub.subscribe(callback_channel)
+            
+            # 타임아웃 설정
+            MAX_WAIT_TIME = 5.0  # 5초
+            start_time = time.time()
+            
+            try:
+                while time.time() - start_time < MAX_WAIT_TIME:
+                    message = await pubsub.get_message(timeout=1.0)
+                    if message and message['type'] == 'message':
+                        response_data = json.loads(message['data'].decode('utf-8'))
+                        if response_data.get('status') == 'success':
+                            file_content = response_data.get('content', '')
+                            metadata['reference_content'] = file_content
+                            
+                            # Redis에 참조 파일 내용 캐싱
+                            await self.redis_client.set(cache_key, file_content, ex=86400)  # 24시간 유지
+                            api_logger.info(f"참조 파일 '{reference_path}' 로드 성공")
+                            break
+                        elif response_data.get('status') == 'error':
+                            metadata['reference_error'] = response_data.get('error', '알 수 없는 오류')
+                            api_logger.error(f"참조 파일 오류: {metadata['reference_error']}")
+                            break
+                        
+                # 타임아웃 체크
+                if 'reference_content' not in metadata and 'reference_error' not in metadata:
+                    metadata['reference_error'] = '참조 파일 요청 타임아웃'
+                    api_logger.error(f"참조 파일 '{reference_path}' 요청 타임아웃")
+            finally:
+                await pubsub.unsubscribe(callback_channel)
+                    
+        except Exception as e:
+            api_logger.error(f"참조 파일 '{reference_path}' 처리 실패: {str(e)}")
+            metadata['reference_error'] = str(e)
+    
     async def _call_llm_api(self, item: Dict) -> str:
-        """LLM API 호출 (실제 구현 필요)"""
-        # 임시 구현 - 실제 LLM API 호출로 대체 필요
-        api_logger.info(f"LLM API 호출: {item['filename']} 청크 {item['chunk_index']+1}")
-        # TODO: 실제 LLM API 호출 구현
-        return f"코드 분석 결과: {item['filename']}"
+        """LLM API 호출
+        
+        메타데이터 정보를 활용하여 연속된 청크의 경우 이전 요약 정보를 참조하여 컨텍스트 유지
+        캐싱을 통해 동일 함수/클래스에 대한 중복 처리 방지
+        """
+        api_logger.info(f"LLM API 호출: {item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']}")
+        
+        code = item['code']
+        metadata = item.get('metadata', {})
+        filename = item['filename']
+        commit_sha = item['commit_sha']
+        user_id = item['user_id']
+        
+        # 캐시 키 생성 (함수/클래스 이름 기반)
+        cache_key = None
+        if 'block_name' in metadata and 'block_type' in metadata:
+            # 함수/클래스 단위로만 캐싱 (청크 번호 제외)
+            block_name = metadata['block_name']
+            block_type = metadata['block_type']
+            cache_key = f"{user_id}:{filename}:{commit_sha}:{block_type}:{block_name}"
+            
+            # 연속된 청크인 경우 이전 함수 요약을 가져옴
+            if 'is_continuation' in metadata and metadata['is_continuation']:
+                previous_result = await self.redis_client.get(cache_key)
+                if previous_result:
+                    api_logger.info(f"청크 분석 진행 중: {block_name} (이전 요약 있음)")
+                    # 이 청크는 이미 분석 중인 함수의 일부이므로, LLM은 호출하되 캐시는 따로 저장하지 않음
+                    # 최종 청크에서 전체 요약본을 저장할 것임
+                    previous_summary = previous_result.decode('utf-8')
+                    
+                    # OpenAI API 파라미터 준비 (이전 요약 포함)
+                    prompt = self._prepare_llm_prompt(code, metadata, previous_summary, filename)
+                    
+                    # TODO: 실제 OpenAI API 호출 구현
+                    # 임시 구현
+                    result = f"이전 요약을 참조한 분석: {previous_summary[:30]}... - {block_name} 계속"
+                    return result
+        else:
+            # 함수/클래스가 아닌 일반 코드는 인덱스로 캐싱
+            cache_key = f"{user_id}:{filename}:{commit_sha}:{item['chunk_index']}"
+        
+        # Redis에서 캐시된 결과 확인
+        cached_result = await self.redis_client.get(cache_key)
+        if cached_result:
+            api_logger.info(f"캐시된 결과 사용: {cache_key}")
+            return cached_result.decode('utf-8')
+        
+        # OpenAI API 파라미터 준비
+        prompt = self._prepare_llm_prompt(code, metadata, None, filename)
+        
+        # TODO: 실제 OpenAI API 호출 구현
+        # 임시 구현 (실제 API 호출로 대체 필요)
+        if 'block_name' in metadata:
+            result = f"코드 분석 결과: {metadata['block_name']} in {filename}"
+        else:
+            result = f"코드 분석 결과: 일반 코드 in {filename}"
+        
+        # 함수/클래스 단위로만 캐싱 - 이 단계에서는 저장하지 않고 _store_analysis_result에서 처리
+        # 여기서 캐싱하지 않는 이유는 연속된 청크의 경우 병합 처리가 필요하기 때문
+        
+        return result
+    
+    def _prepare_llm_prompt(self, code: str, metadata: Dict[str, Any], previous_summary: str = None, filename: str = "") -> str:
+        """LLM API 호출을 위한 프롬프트 생성"""
+        prompt_parts = []
+        
+        # 시스템 명령 추가
+        prompt_parts.append("코드를 분석하고 요약해주세요. 다음 형식으로 응답하세요:")
+        prompt_parts.append("1. 기능 요약: [한 문장 요약]")
+        prompt_parts.append("2. 주요 로직: [핵심 로직 설명]")
+        
+        # 파일명 정보 추가
+        prompt_parts.append(f"\n파일명: {filename}")
+        
+        # 이전 요약 정보가 있으면 추가
+        if previous_summary:
+            prompt_parts.append(f"\n이전 코드 요약: {previous_summary}")
+            prompt_parts.append("이어지는 코드를 분석하세요.")
+        
+        # 메타데이터 정보 추가
+        if 'block_type' in metadata and 'block_name' in metadata:
+            prompt_parts.append(f"\n{metadata['block_type'].capitalize()}: {metadata['block_name']}")
+        
+        # 참조 파일 내용 있으면 추가
+        if 'reference_file' in metadata:
+            prompt_parts.append(f"\n참조 파일: {metadata['reference_file']}")
+            
+            if 'reference_content' in metadata:
+                prompt_parts.append("\n참조 파일 내용:")
+                # 참조 파일 내용이 너무 길면 적절히 잘라서 추가
+                ref_content = metadata['reference_content']
+                if len(ref_content) > 2000:  # 긴 참조 파일은 요약 또는 자르기
+                    ref_content = ref_content[:2000] + "... (생략됨)"
+                prompt_parts.append(ref_content)
+            elif 'reference_error' in metadata:
+                prompt_parts.append(f"\n참조 파일 오류: {metadata['reference_error']}")
+        
+        # 응답 형식 지정되어 있으면 추가
+        if 'response_format' in metadata:
+            prompt_parts.append(f"\n응답 형식: {metadata['response_format']}")
+        
+        # 요구사항 있으면 추가
+        if 'requirements' in metadata:
+            prompt_parts.append(f"\n요구사항: {metadata['requirements']}")
+        
+        # 일반 주석 있으면 추가
+        if 'comment' in metadata:
+            prompt_parts.append(f"\n주석: {metadata['comment']}")
+        
+        # 코드 추가
+        prompt_parts.append("\n분석할 코드:")
+        prompt_parts.append(code)
+        
+        # 추가 지시사항
+        if 'has_next_chunk' in metadata and metadata['has_next_chunk']:
+            prompt_parts.append("\n참고: 이 코드는 다음 청크에서 계속됩니다. 현재까지의 내용을 요약해주세요.")
+        
+        return "\n".join(prompt_parts)
     
     async def _store_analysis_result(self, item: Dict, result: str):
         """분석 결과 저장"""
         api_logger.info(f"분석 결과 저장: {item['filename']} 청크 {item['chunk_index']+1}")
         
-        key = f"{item['user_id']}:{item['filename']}:{item['commit_sha']}:{item['chunk_index']}"
+        metadata = item.get('metadata', {})
+        user_id = item['user_id']
+        filename = item['filename']
+        commit_sha = item['commit_sha']
         
-        # Redis에 결과 저장 (임시)
-        await self.redis_client.set(key, result, ex=86400)  # 24시간 유지
+        # 함수/클래스 기반 키 (있는 경우)
+        block_key = None
+        if 'block_name' in metadata and 'block_type' in metadata:
+            block_name = metadata['block_name']
+            block_type = metadata['block_type']
+            
+            # 함수/클래스 단위로만 저장 (청크 번호 제외)
+            block_key = f"{user_id}:{filename}:{commit_sha}:{block_type}:{block_name}"
+            
+            # 여러 청크로 나뉜 경우에는 마지막 청크 결과만 저장하거나 
+            # 이전 결과와 병합하여 함수 전체에 대한 요약으로 저장
+            if 'is_continuation' in metadata and metadata['is_continuation']:
+                # 이전 요약이 있으면 가져오기
+                prev_result = await self.redis_client.get(block_key)
+                if prev_result:
+                    # 이전 요약과 현재 요약 병합 (여기서는 간단히 연결)
+                    prev_summary = prev_result.decode('utf-8')
+                    combined_result = f"{prev_summary}\n---\n{result}"
+                    result = combined_result
+                    api_logger.info(f"함수 요약 병합: {block_name}")
+            
+            # Redis에 함수/클래스 단위로만 저장
+            await self.redis_client.set(block_key, result, ex=86400)  # 24시간 유지
+            api_logger.info(f"함수 단위로 저장됨: {block_key}")
+        else:
+            # 함수/클래스가 아닌 일반 코드는 인덱스로 저장
+            index_key = f"{user_id}:{filename}:{commit_sha}:{item['chunk_index']}"
+            await self.redis_client.set(index_key, result, ex=86400)  # 24시간 유지
         
-        # TODO: Supabase에 결과 저장 (실제 구현 필요)
+        # Supabase에 결과 저장 (실제 구현)
+        try:
+            # 분석 결과 데이터 준비
+            analysis_data = {
+                "user_id": user_id,
+                "filename": filename,
+                "commit_sha": commit_sha,
+                "chunk_index": item['chunk_index'],
+                "total_chunks": item['total_chunks'],
+                "result": result,
+                "metadata": metadata
+            }
+            
+            # 함수/클래스 정보가 있으면 추가
+            if 'block_name' in metadata:
+                analysis_data["block_name"] = metadata['block_name']
+                analysis_data["block_type"] = metadata['block_type']
+                
+                if 'is_continuation' in metadata:
+                    analysis_data["is_continuation"] = True
+                    analysis_data["previous_chunk"] = metadata['previous_chunk']
+            
+            # Supabase에 저장 (테이블명은 프로젝트에 맞게 조정 필요)
+            table_name = "code_analysis_results"
+            await self.supabase.table(table_name).insert(analysis_data).execute()
+            api_logger.info(f"Supabase에 분석 결과 저장 완료: {filename}, 청크 {item['chunk_index']+1}")
+            
+        except Exception as e:
+            api_logger.error(f"Supabase 저장 실패: {str(e)}")

@@ -136,3 +136,93 @@ class GitHubWebhookService:
         except Exception as e:
             api_logger.error(f"GitHub 커밋 상세 조회 실패: {str(e)}")
             raise GithubAPIError(f"커밋 상세 조회 실패: {str(e)}")
+            
+    @async_retry(max_retries=3, delay=1.0, backoff=2.0)
+    async def fetch_file_content(self, owner: str, repo: str, path: str, ref: str = None) -> str:
+        """
+        GraphQL을 사용하여 GitHub 저장소에서 파일 전체 내용 가져오기
+        
+        Args:
+            owner: 저장소 소유자
+            repo: 저장소 이름
+            path: 파일 경로
+            ref: 커밋 SHA 또는 브랜치 이름 (기본값: 기본 브랜치)
+            
+        Returns:
+            파일 전체 내용
+        """
+        try:
+            # GraphQL 엔드포인트
+            graphql_url = "https://api.github.com/graphql"
+            
+            # GraphQL 쿼리
+            expression = f"{ref}:{path}" if ref else path
+            query = """
+            query ($owner: String!, $repo: String!, $expression: String!) {
+              repository(owner: $owner, name: $repo) {
+                object(expression: $expression) {
+                  ... on Blob {
+                    text
+                  }
+                }
+              }
+            }
+            """
+            
+            variables = {
+                "owner": owner,
+                "repo": repo,
+                "expression": expression
+            }
+            
+            payload = {
+                "query": query,
+                "variables": variables
+            }
+            
+            headers = {"Authorization": f"Bearer {self.token}"}
+            
+            async with httpx.AsyncClient() as client:
+                response = await client.post(graphql_url, json=payload, headers=headers, timeout=15)
+                response.raise_for_status()
+                result = response.json()
+                
+                # 결과 확인 및 파일 내용 추출
+                if "errors" in result:
+                    error_msg = result["errors"][0]["message"]
+                    api_logger.error(f"GraphQL 요청 오류: {error_msg}")
+                    raise GithubAPIError(f"파일 내용 조회 실패: {error_msg}")
+                
+                file_content = result.get("data", {}).get("repository", {}).get("object", {}).get("text")
+                if file_content is None:
+                    raise GithubAPIError(f"파일 내용이 없거나 파일을 찾을 수 없습니다: {path}")
+                
+                return file_content
+                
+        except Exception as e:
+            api_logger.error(f"GitHub 파일 내용 조회 실패: {str(e)}")
+            raise GithubAPIError(f"파일 내용 조회 실패: {str(e)}")
+            
+    @async_retry(max_retries=3, delay=1.0, backoff=2.0)
+    async def fetch_reference_file(self, owner: str, repo: str, reference_path: str, ref: str = None) -> Dict:
+        """
+        참조 파일 내용 가져오기
+        
+        Args:
+            owner: 저장소 소유자
+            repo: 저장소 이름
+            reference_path: 참조 파일 경로
+            ref: 커밋 SHA 또는 브랜치 이름
+            
+        Returns:
+            참조 파일 정보
+        """
+        try:
+            content = await self.fetch_file_content(owner, repo, reference_path, ref)
+            return {
+                "path": reference_path,
+                "content": content
+            }
+        except Exception as e:
+            api_logger.error(f"참조 파일 조회 실패: {str(e)}")
+            raise GithubAPIError(f"참조 파일 조회 실패: {str(e)}")
