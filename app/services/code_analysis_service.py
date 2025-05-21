@@ -446,6 +446,7 @@ class CodeAnalysisService:
         
         # OpenAI API 파라미터 준비
         prompt = self._prepare_llm_prompt(code, metadata, None, filename)
+        print(prompt)
         api_logger.info(f"프롬프트 준비 완료 (길이: {len(prompt)})")
         
         # OpenAI API 호출 구현
