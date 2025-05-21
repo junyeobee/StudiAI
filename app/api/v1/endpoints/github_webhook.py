@@ -8,7 +8,7 @@ from app.api.v1.dependencies.github import get_github_webhook_service
 from app.utils.logger import api_logger
 from app.utils.github_webhook_helper import GithubWebhookHelper
 from app.api.v1.handler.github_webhook_handler import GitHubWebhookHandler
-from redis.asyncio import Redis
+from redis import Redis
 from app.core.redis_connect import get_redis
 
 router = APIRouter()

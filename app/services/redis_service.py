@@ -1,4 +1,4 @@
-import redis.asyncio as redis
+import redis
 from app.utils.retry import async_retry
 from app.utils.logger import api_logger
 from app.core.exceptions import RedisError

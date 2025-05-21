@@ -123,67 +123,91 @@ class GitHubWebhookHandler:
             
     def _register_reference_file_handler(self, github_service: GitHubWebhookService, owner: str, repo: str, user_id: str):
         """참조 파일 가져오기 서비스 등록"""
-        # 레디스에 참조 파일 요청을 처리할 콜백 등록
-        # 이 메서드는 CodeAnalysisService에서 참조 파일 로드 시 호출될 수 있도록 설계
+        # 비동기 PubSub 대신 키-값 기반 처리 방식 사용
         
-        async def fetch_reference_file_callback(channel, message):
-            """참조 파일 요청 콜백"""
+        # 참조 파일 키 접두사 설정
+        reference_key_prefix = f"ref_request:{owner}:{repo}:{user_id}:"
+        response_key_prefix = f"ref_response:{owner}:{repo}:{user_id}:"
+        
+        # 참조 파일 요청 폴링 태스크
+        async def poll_reference_requests():
+            """주기적으로 참조 파일 요청 확인"""
             try:
-                # 메시지 파싱
-                request_data = json.loads(message.decode('utf-8'))
-                reference_path = request_data.get('path')
-                commit_sha = request_data.get('commit_sha', 'HEAD')
-                callback_channel = request_data.get('callback_channel')
-                
-                if not reference_path or not callback_channel:
-                    return
-                
-                # GitHub API로 파일 가져오기
-                try:
-                    file_content = await github_service.fetch_file_content(
-                        owner=owner,
-                        repo=repo,
-                        path=reference_path,
-                        ref=commit_sha
-                    )
+                while True:
+                    # 요청 키 패턴으로 검색
+                    request_keys = self.redis_client.keys(f"{reference_key_prefix}*")
                     
-                    # 응답 구성
-                    response = {
-                        'path': reference_path,
-                        'content': file_content,
-                        'status': 'success'
-                    }
-                except Exception as e:
-                    response = {
-                        'path': reference_path,
-                        'error': str(e),
-                        'status': 'error'
-                    }
-                
-                # 콜백 채널로 결과 전송
-                await self.redis_client.publish(callback_channel, json.dumps(response))
-                
+                    for key in request_keys:
+                        try:
+                            # 요청 데이터 가져오기
+                            request_data_str = self.redis_client.get(key)
+                            if not request_data_str:
+                                continue
+                                
+                            # 요청 처리
+                            request_data = json.loads(request_data_str)
+                            reference_path = request_data.get('path')
+                            commit_sha = request_data.get('commit_sha', 'HEAD')
+                            request_id = request_data.get('request_id')
+                            
+                            if not reference_path or not request_id:
+                                continue
+                            
+                            # 이미 처리 중인지 확인
+                            processing_key = f"{reference_key_prefix}processing:{request_id}"
+                            if self.redis_client.exists(processing_key):
+                                continue
+                                
+                            # 처리 중 표시
+                            self.redis_client.setex(processing_key, 60, "1")  # 1분 타임아웃
+                            
+                            # 요청 키 삭제
+                            self.redis_client.delete(key)
+                            
+                            # GitHub API로 파일 가져오기
+                            try:
+                                file_content = await github_service.fetch_file_content(
+                                    owner=owner,
+                                    repo=repo,
+                                    path=reference_path,
+                                    ref=commit_sha
+                                )
+                                
+                                # 응답 저장
+                                response = {
+                                    'path': reference_path,
+                                    'content': file_content,
+                                    'status': 'success'
+                                }
+                            except Exception as e:
+                                response = {
+                                    'path': reference_path,
+                                    'error': str(e),
+                                    'status': 'error'
+                                }
+                            
+                            # 응답 저장
+                            response_key = f"{response_key_prefix}{request_id}"
+                            self.redis_client.setex(
+                                response_key, 
+                                300,  # 5분 유효
+                                json.dumps(response)
+                            )
+                            
+                            # 처리 완료 표시 삭제
+                            self.redis_client.delete(processing_key)
+                            
+                            api_logger.info(f"참조 파일 '{reference_path}' 처리 완료: {response['status']}")
+                            
+                        except Exception as e:
+                            api_logger.error(f"참조 파일 처리 오류: {str(e)}")
+                    
+                    await asyncio.sleep(1)
             except Exception as e:
-                api_logger.error(f"참조 파일 처리 오류: {str(e)}")
+                api_logger.error(f"참조 파일 폴링 오류: {str(e)}")
         
-        # Redis PubSub 구독 설정
-        reference_channel = f"ref_request:{owner}:{repo}:{user_id}"
-        
-        # 비동기로 Redis 채널 구독
-        async def subscribe_to_channel():
-            pubsub = self.redis_client.pubsub()
-            await pubsub.subscribe(reference_channel)
-            try:
-                async for message in pubsub.listen():
-                    if message['type'] == 'message':
-                        await fetch_reference_file_callback(reference_channel, message['data'])
-            except Exception as e:
-                api_logger.error(f"Redis 구독 오류: {str(e)}")
-            finally:
-                await pubsub.unsubscribe(reference_channel)
-
-        # 백그라운드 태스크로 구독 시작 (별도 실행 필요)
-        asyncio.create_task(subscribe_to_channel())
+        # 폴링 태스크 시작
+        asyncio.create_task(poll_reference_requests())
     
     async def _start_queue_worker(self, analysis_service: CodeAnalysisService):
         """분석 큐 처리 워커 시작"""

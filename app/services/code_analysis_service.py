@@ -277,7 +277,7 @@ class CodeAnalysisService:
         commit_sha = item['commit_sha']
         
         cache_key = f"{user_id}:ref:{reference_path}:{commit_sha}"
-        cached_content = await self.redis_client.get(cache_key)
+        cached_content = self.redis_client.get(cache_key)
         
         if cached_content:
             # 캐시에서 참조 파일 내용 가져오기
@@ -286,8 +286,8 @@ class CodeAnalysisService:
             return
             
         try:
-            # Redis PubSub을 통해 참조 파일 요청
-            # webhook_handler에 등록된 핸들러가 이 요청을 처리함
+            # Redis 키-값 방식으로 참조 파일 요청
+            # owner/repo 정보 추출 시도
             owner_repo = None
             if '/' in reference_path:
                 parts = reference_path.split('/')
@@ -295,54 +295,54 @@ class CodeAnalysisService:
                     # 경로에서 owner/repo 부분 추출 시도
                     owner_repo = '/'.join(parts[:2])
             
-            # 콜백 채널 설정 (고유한 ID 사용)
-            callback_id = f"{user_id}:{commit_sha}:{item['chunk_index']}"
-            callback_channel = f"ref_response:{callback_id}"
+            # 고유한 요청 ID 생성
+            request_id = f"{user_id}_{commit_sha}_{int(time.time())}_{item['chunk_index']}"
             
-            # 참조 파일 요청 메시지 구성
+            # 참조 파일 요청 데이터 구성
             request_data = {
                 'path': reference_path,
                 'commit_sha': commit_sha,
-                'callback_channel': callback_channel
+                'request_id': request_id
             }
             
-            # 참조 파일 요청 발행
-            request_channel = f"ref_request:{owner_repo or 'unknown'}:{user_id}"
-            await self.redis_client.publish(request_channel, json.dumps(request_data))
-            api_logger.info(f"참조 파일 '{reference_path}' 요청 발행됨")
+            # 요청 키 설정
+            owner_repo = owner_repo or "unknown"
+            request_key = f"ref_request:{owner_repo}:{user_id}:{request_id}"
+            response_key = f"ref_response:{owner_repo}:{user_id}:{request_id}"
             
-            # 응답 대기 (최대 5초)
-            pubsub = self.redis_client.pubsub()
-            await pubsub.subscribe(callback_channel)
+            # 요청 저장 (5분 유효)
+            self.redis_client.setex(request_key, 300, json.dumps(request_data))
+            api_logger.info(f"참조 파일 '{reference_path}' 요청 등록됨 (ID: {request_id})")
             
-            # 타임아웃 설정
+            # 응답 폴링 (최대 5초)
             MAX_WAIT_TIME = 5.0  # 5초
             start_time = time.time()
             
-            try:
-                while time.time() - start_time < MAX_WAIT_TIME:
-                    message = await pubsub.get_message(timeout=1.0)
-                    if message and message['type'] == 'message':
-                        response_data = json.loads(message['data'].decode('utf-8'))
-                        if response_data.get('status') == 'success':
-                            file_content = response_data.get('content', '')
-                            metadata['reference_content'] = file_content
-                            
-                            # Redis에 참조 파일 내용 캐싱
-                            await self.redis_client.set(cache_key, file_content, ex=86400)  # 24시간 유지
-                            api_logger.info(f"참조 파일 '{reference_path}' 로드 성공")
-                            break
-                        elif response_data.get('status') == 'error':
-                            metadata['reference_error'] = response_data.get('error', '알 수 없는 오류')
-                            api_logger.error(f"참조 파일 오류: {metadata['reference_error']}")
-                            break
+            while time.time() - start_time < MAX_WAIT_TIME:
+                # 응답 확인
+                response_data_str = self.redis_client.get(response_key)
+                if response_data_str:
+                    response_data = json.loads(response_data_str)
+                    if response_data.get('status') == 'success':
+                        file_content = response_data.get('content', '')
+                        metadata['reference_content'] = file_content
                         
-                # 타임아웃 체크
-                if 'reference_content' not in metadata and 'reference_error' not in metadata:
-                    metadata['reference_error'] = '참조 파일 요청 타임아웃'
-                    api_logger.error(f"참조 파일 '{reference_path}' 요청 타임아웃")
-            finally:
-                await pubsub.unsubscribe(callback_channel)
+                        # Redis에 참조 파일 내용 캐싱
+                        self.redis_client.setex(cache_key, 86400, file_content)  # 24시간 유지
+                        api_logger.info(f"참조 파일 '{reference_path}' 로드 성공")
+                        break
+                    elif response_data.get('status') == 'error':
+                        metadata['reference_error'] = response_data.get('error', '알 수 없는 오류')
+                        api_logger.error(f"참조 파일 오류: {metadata['reference_error']}")
+                        break
+                
+                # 잠시 대기 후 다시 확인
+                await asyncio.sleep(0.5)
+                
+            # 타임아웃 체크
+            if 'reference_content' not in metadata and 'reference_error' not in metadata:
+                metadata['reference_error'] = '참조 파일 요청 타임아웃'
+                api_logger.error(f"참조 파일 '{reference_path}' 요청 타임아웃")
                     
         except Exception as e:
             api_logger.error(f"참조 파일 '{reference_path}' 처리 실패: {str(e)}")
