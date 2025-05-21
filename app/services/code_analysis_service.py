@@ -1,4 +1,4 @@
-from redis.asyncio import Redis
+from redis import Redis
 from supabase._async.client import AsyncClient
 from typing import Dict, List, Any
 from app.utils.logger import api_logger
@@ -537,7 +537,7 @@ class CodeAnalysisService:
             # 이전 결과와 병합하여 함수 전체에 대한 요약으로 저장
             if 'is_continuation' in metadata and metadata['is_continuation']:
                 # 이전 요약이 있으면 가져오기
-                prev_result = await self.redis_client.get(block_key)
+                prev_result = self.redis_client.get(block_key)
                 if prev_result:
                     # 이전 요약과 현재 요약 병합 (여기서는 간단히 연결)
                     prev_summary = prev_result.decode('utf-8')
@@ -546,12 +546,12 @@ class CodeAnalysisService:
                     api_logger.info(f"함수 요약 병합: {block_name}")
             
             # Redis에 함수/클래스 단위로만 저장
-            await self.redis_client.set(block_key, result, ex=86400)  # 24시간 유지
+            self.redis_client.set(block_key, result, ex=86400)  # 24시간 유지
             api_logger.info(f"함수 단위로 저장됨: {block_key}")
         else:
             # 함수/클래스가 아닌 일반 코드는 인덱스로 저장
             index_key = f"{user_id}:{filename}:{commit_sha}:{item['chunk_index']}"
-            await self.redis_client.set(index_key, result, ex=86400)  # 24시간 유지
+            self.redis_client.set(index_key, result, ex=86400)  # 24시간 유지
         
         # Supabase에 결과 저장 (실제 구현)
         try:

@@ -3,7 +3,7 @@ from app.utils.github_webhook_helper import GithubWebhookHelper
 from app.services.github_webhook_service import GitHubWebhookService
 from app.services.auth_service import get_integration_token
 from app.services.code_analysis_service import CodeAnalysisService
-from redis.asyncio import Redis
+from redis import Redis
 from app.services.supa import get_active_webhooks
 from supabase._async.client import AsyncClient
 from typing import Dict, List, Optional, Tuple
@@ -12,6 +12,7 @@ import json
 import hmac
 import hashlib
 import asyncio
+import time
 
 class GitHubWebhookHandler:
     """GitHub 웹훅 처리를 담당하는 핸들러 클래스"""
@@ -227,8 +228,8 @@ class GitHubWebhookHandler:
         asyncio.create_task(poll_reference_requests())
     
     async def _start_queue_worker(self, analysis_service: CodeAnalysisService):
-        """분석 큐 처리 워커 시작"""
-        await analysis_service.process_queue()
+        """분석 큐 처리 워커 시작 (타임아웃 포함)"""
+        await analysis_service.process_queue(timeout=300)  # 5분 타임아웃
     
     async def _analyze_commit(self, github_service: GitHubWebhookService, analysis_service: CodeAnalysisService, 
                              owner: str, repo: str, commit_sha: str, user_id: str):
@@ -296,3 +297,22 @@ class GitHubWebhookHandler:
             
         except Exception as e:
             api_logger.error(f"커밋 분석 실패: {str(e)}")
+
+    async def process_queue(self):
+        """비동기로 큐 처리 - 작업 완료시 즉시 종료"""
+        api_logger.info("코드 분석 큐 처리 시작")
+        
+        try:
+            queue_size = self.queue.qsize()
+            api_logger.info(f"현재 큐 크기: {queue_size}")
+        except NotImplementedError:
+            api_logger.info("큐 크기 확인 불가")
+        
+        # 큐가 비어있으면 즉시 종료
+        if self.queue.empty():
+            api_logger.info("큐가 비었습니다. 작업 완료")
+            return
+        
+        # 모든 큐 항목 처리 완료까지 대기
+        await self.queue.join()
+        api_logger.info("모든 큐 항목 처리 완료")
