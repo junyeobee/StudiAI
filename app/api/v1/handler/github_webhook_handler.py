@@ -95,6 +95,7 @@ class GitHubWebhookHandler:
         """푸시 이벤트 처리"""
         # 1. 커밋 정보 추출
         code_bundle = await GithubWebhookHelper.process_github_push_event(payload)
+        print(code_bundle)
         
         # 2. GitHub 토큰 가져오기
         decrypted_pat = await get_integration_token(verified_row["created_by"], "github", self.supabase)
