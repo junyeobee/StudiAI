@@ -301,7 +301,7 @@ class CodeAnalysisService:
         
         if cached_content:
             # 캐시에서 참조 파일 내용 가져오기
-            metadata['reference_content'] = cached_content.decode('utf-8')
+            metadata['reference_content'] = cached_content
             api_logger.info(f"참조 파일 '{reference_path}' 캐시에서 로드됨")
             return
             
@@ -397,15 +397,14 @@ class CodeAnalysisService:
                     api_logger.info(f"청크 분석 진행 중: {block_name} (이전 요약 있음)")
                     # 이 청크는 이미 분석 중인 함수의 일부이므로, LLM은 호출하되 캐시는 따로 저장하지 않음
                     # 최종 청크에서 전체 요약본을 저장할 것임
-                    previous_summary = previous_result.decode('utf-8')
                     
                     # OpenAI API 파라미터 준비 (이전 요약 포함)
-                    prompt = self._prepare_llm_prompt(code, metadata, previous_summary, filename)
+                    prompt = self._prepare_llm_prompt(code, metadata, previous_result, filename)
                     api_logger.info(f"이전 요약을 포함한 프롬프트 준비 완료 (길이: {len(prompt)})")
                     
                     # TODO: 실제 OpenAI API 호출 구현
                     # 임시 구현
-                    result = f"이전 요약을 참조한 분석: {previous_summary[:30]}... - {block_name} 계속"
+                    result = f"이전 요약을 참조한 분석: {previous_result[:30]}... - {block_name} 계속"
                     return result
         else:
             # 함수/클래스가 아닌 일반 코드는 인덱스로 캐싱
@@ -415,7 +414,7 @@ class CodeAnalysisService:
         cached_result = self.redis_client.get(cache_key)
         if cached_result:
             api_logger.info(f"캐시된 결과 사용: {cache_key}")
-            return cached_result.decode('utf-8')
+            return cached_result
         
         # OpenAI API 파라미터 준비
         prompt = self._prepare_llm_prompt(code, metadata, None, filename)
@@ -540,8 +539,7 @@ class CodeAnalysisService:
                 prev_result = self.redis_client.get(block_key)
                 if prev_result:
                     # 이전 요약과 현재 요약 병합 (여기서는 간단히 연결)
-                    prev_summary = prev_result.decode('utf-8')
-                    combined_result = f"{prev_summary}\n---\n{result}"
+                    combined_result = f"{prev_result}\n---\n{result}"
                     result = combined_result
                     api_logger.info(f"함수 요약 병합: {block_name}")
             
