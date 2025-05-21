@@ -113,7 +113,7 @@ class GitHubWebhookHandler:
         decrypted_pat = await get_integration_token(verified_row["created_by"], "github", self.supabase)
         github_service = GitHubWebhookService(token=decrypted_pat)
         
-        # 3. 분석 서비스 초기화 및 백그라운드 작업 등록
+        # 3. 분석 서비스 초기화
         analysis_service = CodeAnalysisService(self.redis_client, self.supabase)
         api_logger.info("코드 분석 서비스 초기화 완료")
         
@@ -121,15 +121,10 @@ class GitHubWebhookHandler:
         self._register_reference_file_handler(github_service, owner, repo, verified_row["created_by"])
         api_logger.info("참조 파일 핸들러 등록 완료")
         
-        # 4. 큐 처리 워커 시작 (백그라운드)
-        background_tasks.add_task(self._start_queue_worker, analysis_service)
-        api_logger.info("큐 처리 워커 백그라운드 태스크 등록 완료")
-        
-        # 5. 커밋별 파일 분석 작업 등록
+        # 동기식 처리를 위해 백그라운드 태스크 대신 직접 커밋 분석 후 큐 처리
         for i, commit in enumerate(code_bundle):
-            api_logger.info(f"커밋 {i+1}/{len(code_bundle)} 분석 태스크 등록: {commit['sha'][:8]}")
-            background_tasks.add_task(
-                self._analyze_commit,
+            api_logger.info(f"커밋 {i+1}/{len(code_bundle)} 분석 시작: {commit['sha'][:8]}")
+            await self._analyze_commit(
                 github_service=github_service,
                 analysis_service=analysis_service,
                 owner=owner,
@@ -137,8 +132,12 @@ class GitHubWebhookHandler:
                 commit_sha=commit["sha"],
                 user_id=verified_row["created_by"]
             )
-        api_logger.info("모든 커밋 분석 태스크 등록 완료")
-            
+            api_logger.info(f"커밋 {i+1}/{len(code_bundle)} 분석 완료: {commit['sha'][:8]}")
+        
+        # 큐 처리를 위한 백그라운드 태스크만 등록 (분석 작업은 이미 큐에 추가됨)
+        background_tasks.add_task(self._start_queue_worker, analysis_service)
+        api_logger.info("큐 처리 워커 백그라운드 태스크 등록 완료")
+    
     def _register_reference_file_handler(self, github_service: GitHubWebhookService, owner: str, repo: str, user_id: str):
         """참조 파일 가져오기 서비스 등록"""
         # 비동기 PubSub 대신 키-값 기반 처리 방식 사용

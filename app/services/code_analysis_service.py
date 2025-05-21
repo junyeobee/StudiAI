@@ -392,7 +392,7 @@ class CodeAnalysisService:
             
             # 연속된 청크인 경우 이전 함수 요약을 가져옴
             if 'is_continuation' in metadata and metadata['is_continuation']:
-                previous_result = await self.redis_client.get(cache_key)
+                previous_result = self.redis_client.get(cache_key)
                 if previous_result:
                     api_logger.info(f"청크 분석 진행 중: {block_name} (이전 요약 있음)")
                     # 이 청크는 이미 분석 중인 함수의 일부이므로, LLM은 호출하되 캐시는 따로 저장하지 않음
@@ -401,6 +401,7 @@ class CodeAnalysisService:
                     
                     # OpenAI API 파라미터 준비 (이전 요약 포함)
                     prompt = self._prepare_llm_prompt(code, metadata, previous_summary, filename)
+                    api_logger.info(f"이전 요약을 포함한 프롬프트 준비 완료 (길이: {len(prompt)})")
                     
                     # TODO: 실제 OpenAI API 호출 구현
                     # 임시 구현
@@ -411,20 +412,46 @@ class CodeAnalysisService:
             cache_key = f"{user_id}:{filename}:{commit_sha}:{item['chunk_index']}"
         
         # Redis에서 캐시된 결과 확인
-        cached_result = await self.redis_client.get(cache_key)
+        cached_result = self.redis_client.get(cache_key)
         if cached_result:
             api_logger.info(f"캐시된 결과 사용: {cache_key}")
             return cached_result.decode('utf-8')
         
         # OpenAI API 파라미터 준비
         prompt = self._prepare_llm_prompt(code, metadata, None, filename)
+        api_logger.info(f"프롬프트 준비 완료 (길이: {len(prompt)})")
         
-        # openai한테 api 요청, prompt전달.
-        # 응답 받은 결과를 전달.
-        if 'block_name' in metadata:
-            result = f"코드 분석 결과: {metadata['block_name']} in {filename}"
-        else:
-            result = f"코드 분석 결과: 일반 코드 in {filename}"
+        # OpenAI API 호출 구현
+        try:
+            # OpenAI API를 이용한 코드 분석
+            # 아래는 임시 구현으로, 실제 구현 시 OpenAI API 호출 코드로 대체해야 함
+            api_logger.info("OpenAI API 호출 (임시 구현)")
+            
+            # 실제 OpenAI API 코드는 아래와 같이 구현할 수 있습니다:
+            # from openai import AsyncOpenAI
+            # client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+            # response = await client.chat.completions.create(
+            #     model="gpt-4",
+            #     messages=[
+            #         {"role": "system", "content": "You are a code analysis assistant."},
+            #         {"role": "user", "content": prompt}
+            #     ],
+            #     temperature=0.3,
+            #     max_tokens=1500
+            # )
+            # result = response.choices[0].message.content
+            
+            # 임시 결과 생성
+            if 'block_name' in metadata:
+                result = f"코드 분석 결과: {metadata['block_name']} in {filename}"
+            else:
+                result = f"코드 분석 결과: 일반 코드 in {filename}"
+            
+            api_logger.info(f"OpenAI API 응답 받음 (길이: {len(result)})")
+            
+        except Exception as e:
+            api_logger.error(f"OpenAI API 호출 실패: {str(e)}")
+            result = f"분석 실패: {str(e)}"
         
         # 함수/클래스 단위로만 캐싱 - 이 단계에서는 저장하지 않고 _store_analysis_result에서 처리
         # 여기서 캐싱하지 않는 이유는 연속된 청크의 경우 병합 처리가 필요하기 때문
