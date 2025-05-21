@@ -22,20 +22,28 @@ class GitHubWebhookHandler:
     async def handle_webhook(self, request: Request, background_tasks: BackgroundTasks) -> Dict:
         """메인 핸들러 함수: 웹훅 처리의 전체 흐름 관리"""
         try:
+            api_logger.info("===== 웹훅 요청 수신 =====")
             # 1. 요청 데이터 추출 및 검증
             body_bytes, headers = await self._extract_request_data(request)
             signature = headers.get("X-Hub-Signature-256")
+            event_type = headers.get("X-GitHub-Event")
+            api_logger.info(f"웹훅 이벤트 유형: {event_type}")
+            
             if not signature:
                 raise HTTPException(401, "Signature missing")
                 
             # 2. 페이로드 파싱 및 저장소 정보 추출
             payload = self._parse_payload(body_bytes)
             owner, repo = self._extract_repo_info(payload)
+            api_logger.info(f"저장소 정보: {owner}/{repo}")
+            
             if not owner or not repo:
                 return {"status": "success"}
                 
             # 3. 웹훅 정보 조회 및 서명 검증
             webhook_rows = await self._get_active_webhooks(owner, repo)
+            api_logger.info(f"활성 웹훅 수: {len(webhook_rows)}")
+            
             if not webhook_rows:
                 return {"status": "success"}
                 
@@ -43,9 +51,11 @@ class GitHubWebhookHandler:
             if not verified_row:
                 raise HTTPException(401, "Invalid signature")
             
+            api_logger.info(f"서명 검증 성공, 사용자 ID: {verified_row['created_by']}")
+            
             # 4. 이벤트 유형에 따른 처리
-            event_type = headers.get("X-GitHub-Event")
             if event_type == "push":
+                api_logger.info("푸시 이벤트 처리 시작")
                 await self._process_push_event(payload, verified_row, owner, repo, background_tasks)
             
             return {"status": "success"}
@@ -94,24 +104,30 @@ class GitHubWebhookHandler:
     async def _process_push_event(self, payload: Dict, verified_row: Dict, owner: str, repo: str, background_tasks: BackgroundTasks):
         """푸시 이벤트 처리"""
         # 1. 커밋 정보 추출
+        api_logger.info("커밋 정보 추출 시작")
         code_bundle = await GithubWebhookHelper.process_github_push_event(payload)
-        print(code_bundle)
+        api_logger.info(f"추출된 커밋 수: {len(code_bundle)}")
         
         # 2. GitHub 토큰 가져오기
+        api_logger.info("GitHub 토큰 가져오기")
         decrypted_pat = await get_integration_token(verified_row["created_by"], "github", self.supabase)
         github_service = GitHubWebhookService(token=decrypted_pat)
         
         # 3. 분석 서비스 초기화 및 백그라운드 작업 등록
         analysis_service = CodeAnalysisService(self.redis_client, self.supabase)
+        api_logger.info("코드 분석 서비스 초기화 완료")
         
         # 3.1 참조 파일 가져오기 서비스 핸들러 등록
         self._register_reference_file_handler(github_service, owner, repo, verified_row["created_by"])
+        api_logger.info("참조 파일 핸들러 등록 완료")
         
         # 4. 큐 처리 워커 시작 (백그라운드)
         background_tasks.add_task(self._start_queue_worker, analysis_service)
+        api_logger.info("큐 처리 워커 백그라운드 태스크 등록 완료")
         
         # 5. 커밋별 파일 분석 작업 등록
-        for commit in code_bundle:
+        for i, commit in enumerate(code_bundle):
+            api_logger.info(f"커밋 {i+1}/{len(code_bundle)} 분석 태스크 등록: {commit['sha'][:8]}")
             background_tasks.add_task(
                 self._analyze_commit,
                 github_service=github_service,
@@ -121,6 +137,7 @@ class GitHubWebhookHandler:
                 commit_sha=commit["sha"],
                 user_id=verified_row["created_by"]
             )
+        api_logger.info("모든 커밋 분석 태스크 등록 완료")
             
     def _register_reference_file_handler(self, github_service: GitHubWebhookService, owner: str, repo: str, user_id: str):
         """참조 파일 가져오기 서비스 등록"""
@@ -219,10 +236,20 @@ class GitHubWebhookHandler:
         """커밋 상세 정보 조회 및 분석"""
         try:
             # 커밋 상세 정보 조회
+            api_logger.info(f"커밋 상세 정보 조회 시작: {commit_sha[:8]}")
             commit_detail = await github_service.fetch_commit_detail(owner, repo, commit_sha)
             
-            # 수정된 파일들에 대해 전체 내용 가져오기
             files = commit_detail.get("files", [])
+            api_logger.info(f"커밋에 포함된 파일 수: {len(files)}")
+            
+            # 디버깅: 파일 정보 로깅
+            for i, file in enumerate(files):
+                status = file.get("status", "unknown")
+                filename = file.get("filename", "unknown")
+                has_patch = "patch" in file
+                api_logger.info(f"파일 {i+1}/{len(files)}: {filename}, 상태: {status}, 패치 존재: {has_patch}")
+            
+            # 수정된 파일들에 대해 전체 내용 가져오기
             for file in files:
                 status = file.get("status", "")
                 filename = file.get("filename", "")
@@ -230,6 +257,7 @@ class GitHubWebhookHandler:
                 # 파일이 수정된 경우에만 전체 내용 가져오기 필요
                 if status == "modified" and "patch" in file:
                     try:
+                        api_logger.info(f"파일 '{filename}' 전체 내용 가져오기 시작")
                         # GraphQL로 파일 전체 내용 가져오기
                         file_content = await github_service.fetch_file_content(
                             owner=owner,
@@ -247,8 +275,17 @@ class GitHubWebhookHandler:
                 # 추가된 파일의 경우 patch가 전체 내용이므로 full_content 별도 설정
                 elif status == "added" and "patch" in file:
                     file["full_content"] = file["patch"]
+                    api_logger.info(f"추가된 파일 '{filename}'의 내용을 patch에서 복사")
+            
+            # 디버깅: 코드 분석 전 파일 상태 로깅
+            for i, file in enumerate(files):
+                filename = file.get("filename", "unknown")
+                has_patch = "patch" in file
+                has_full = "full_content" in file
+                api_logger.info(f"분석 전 파일 {i+1}/{len(files)}: {filename}, 패치 존재: {has_patch}, 전체 내용 존재: {has_full}")
             
             # 코드 변경 분석
+            api_logger.info(f"코드 변경 분석 호출: {commit_sha[:8]}")
             await analysis_service.analyze_code_changes(
                 files=files,
                 owner=owner,
@@ -256,6 +293,7 @@ class GitHubWebhookHandler:
                 commit_sha=commit_sha,
                 user_id=user_id
             )
+            api_logger.info(f"커밋 {commit_sha[:8]} 분석 완료")
             
         except Exception as e:
             api_logger.error(f"커밋 분석 실패: {str(e)}")

@@ -18,21 +18,25 @@ class CodeAnalysisService:
         """코드 변경 분석 진입점"""
         api_logger.info(f"분석할 파일 수: {len(files)}")
         tasks = []
-        for file in files:
+        processed_count = 0  # 처리된 파일 수
+
+        for i, file in enumerate(files):
             # 패치 또는 전체 내용이 없으면 건너뛰기
             if "patch" not in file and "full_content" not in file:
+                api_logger.info(f"파일 {i+1}/{len(files)} '{file.get('filename', 'unknown')}': 패치/내용 없음, 건너뜀")
                 continue
                 
             # 전체 파일 내용이 있으면 우선 사용, 없으면 패치 사용
             if "full_content" in file:
                 # 전체 파일 내용 사용
                 code_to_analyze = file["full_content"]
-                api_logger.info(f"파일 '{file['filename']}' 전체 내용 분석")
+                api_logger.info(f"파일 '{file['filename']}' 전체 내용 분석 (길이: {len(code_to_analyze)})")
             else:
                 # 패치에서 실제 코드만 추출
                 code_to_analyze = self._strip_patch(file["patch"])
-                api_logger.info(f"파일 '{file['filename']}' 패치 내용 분석")
-                
+                api_logger.info(f"파일 '{file['filename']}' 패치 내용 분석 (패치 길이: {len(file['patch'])}, 추출 코드 길이: {len(code_to_analyze)})")
+               
+            processed_count += 1
             tasks.append(self._enqueue_code_analysis(
                 code_to_analyze, 
                 file["filename"], 
@@ -40,8 +44,12 @@ class CodeAnalysisService:
                 user_id
             ))
         
-        await asyncio.gather(*tasks)
-        api_logger.info("모든 코드 분석 작업이 큐에 추가됨")
+        api_logger.info(f"총 {len(files)}개 파일 중 {processed_count}개 파일 분석 작업 등록됨")
+        if tasks:
+            await asyncio.gather(*tasks)
+            api_logger.info("모든 코드 분석 작업이 큐에 추가됨")
+        else:
+            api_logger.warning("분석할 파일이 없습니다 - 큐에 작업이 추가되지 않음")
     
     async def _strip_patch(self, patch: str) -> str:
         """
@@ -69,7 +77,9 @@ class CodeAnalysisService:
     async def _enqueue_code_analysis(self, code: str, filename: str, commit_sha: str, user_id: str):
         """코드 분석 작업을 큐에 넣음"""
         # 코드가 길면 적절히 분할
+        api_logger.info(f"'{filename}' 코드 분할 시작 (길이: {len(code)})")
         chunks = self._split_code_if_needed(code)
+        api_logger.info(f"'{filename}' 분할 결과: {len(chunks)}개 청크")
         
         for i, chunk in enumerate(chunks):
             metadata = self._extract_metadata(chunk)
@@ -82,7 +92,7 @@ class CodeAnalysisService:
                 "chunk_index": i,
                 "total_chunks": len(chunks)
             })
-            api_logger.info(f"'{filename}' 청크 {i+1}/{len(chunks)} 큐에 추가됨")
+            api_logger.info(f"'{filename}' 청크 {i+1}/{len(chunks)} 큐에 추가됨 (길이: {len(chunk)})")
     
     def _split_code_if_needed(self, code: str) -> List[str]:
         """코드가 너무 길면 여러 청크로 분할
@@ -247,10 +257,17 @@ class CodeAnalysisService:
     async def process_queue(self):
         """비동기로 큐 처리"""
         api_logger.info("코드 분석 큐 처리 시작")
+        try:
+            queue_size = self.queue.qsize()
+            api_logger.info(f"현재 큐 크기: {queue_size}")
+        except NotImplementedError:
+            api_logger.info("큐 크기 확인 불가 (NotImplementedError)")
+        
         while True:
+            api_logger.info("큐에서 작업 대기 중...")
             item = await self.queue.get()
-            if not item :
-                return "item is None"
+            # 디버깅: 아이템 내용 로깅
+            api_logger.info(f"큐에서 아이템 가져옴: {item.get('filename', 'unknown')}, 청크 {item.get('chunk_index', -1)+1}/{item.get('total_chunks', 0)}")
             try:
                 api_logger.info(f"코드 분석 처리: {item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']}")
                 
@@ -264,6 +281,7 @@ class CodeAnalysisService:
                 api_logger.error(f"코드 분석 처리 실패: {str(e)}")
             finally:
                 self.queue.task_done()
+                api_logger.info(f"{item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']} 처리 완료")
     
     async def _fetch_reference_files(self, item: Dict):
         """메타데이터에서 참조 파일 정보 추출 및 가져오기"""
