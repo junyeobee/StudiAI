@@ -8,8 +8,9 @@ from app.api.v1.dependencies.github import get_github_webhook_service
 from app.utils.logger import api_logger
 from app.utils.github_webhook_helper import GithubWebhookHelper
 from app.api.v1.handler.github_webhook_handler import GitHubWebhookHandler
-from redis.asyncio import Redis
-from app.core.redis_connect import get_redis
+from redis import Redis
+from redis.asyncio import Redis as AsyncRedis
+from app.core.redis_connect import get_redis, get_redis_async
 
 router = APIRouter()
 public_router = APIRouter()
@@ -94,7 +95,7 @@ async def handle_github_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
     supabase: AsyncClient = Depends(get_supabase),
-    redis_client: Redis = Depends(get_redis)
+    redis_client: AsyncRedis = Depends(get_redis_async)
 ):
     """GitHub 웹훅 이벤트 처리 엔드포인트"""
     handler = GitHubWebhookHandler(supabase, redis_client)
