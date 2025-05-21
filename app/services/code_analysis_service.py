@@ -255,33 +255,60 @@ class CodeAnalysisService:
         return metadata
     
     async def process_queue(self):
-        """비동기로 큐 처리"""
+        """비동기 큐 처리 - 실제로 종료되게 수정"""
         api_logger.info("코드 분석 큐 처리 시작")
+        
         try:
             queue_size = self.queue.qsize()
             api_logger.info(f"현재 큐 크기: {queue_size}")
         except NotImplementedError:
-            api_logger.info("큐 크기 확인 불가 (NotImplementedError)")
+            api_logger.info("큐 크기 확인 불가")
         
-        while True:
-            api_logger.info("큐에서 작업 대기 중...")
-            item = await self.queue.get()
-            # 디버깅: 아이템 내용 로깅
-            api_logger.info(f"큐에서 아이템 가져옴: {item.get('filename', 'unknown')}, 청크 {item.get('chunk_index', -1)+1}/{item.get('total_chunks', 0)}")
+        # 무작정 대기하지 않고 작업이 있는 경우만 처리
+        if self.queue.empty():
+            api_logger.info("큐가 비어있음, 작업 없음")
+            return
+        
+        # 현재 큐에 있는 항목만 처리하기 위해 개수 미리 저장
+        try:
+            items_to_process = self.queue.qsize()
+        except NotImplementedError:
+            # 큐 사이즈를 가져올 수 없으면 일단 한 개만 처리
+            items_to_process = 1
+        
+        api_logger.info(f"처리할 항목 수: {items_to_process}")
+        
+        # 현재 있는 항목만 처리하고 종료
+        for _ in range(items_to_process):
+            if self.queue.empty():
+                break
+            
             try:
-                api_logger.info(f"코드 분석 처리: {item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']}")
-                
-                # 참조 파일 가져오기 (필요한 경우)
-                await self._fetch_reference_files(item)
-                
-                # LLM API 호출 및 결과 저장
-                result = await self._call_llm_api(item)
-                await self._store_analysis_result(item, result)
+                # 큐에서 아이템 가져오기 (최대 3초 대기)
+                try:
+                    item = await asyncio.wait_for(self.queue.get(), timeout=3.0)
+                except asyncio.TimeoutError:
+                    api_logger.info("큐 대기 타임아웃, 작업 종료")
+                    break
+            
+                # 아이템 처리
+                try:
+                    api_logger.info(f"아이템 처리: {item.get('filename', 'unknown')}")
+                    # 참조 파일 가져오기 (필요한 경우)
+                    await self._fetch_reference_files(item)
+                    
+                    # LLM API 호출 및 결과 저장
+                    result = await self._call_llm_api(item)
+                    await self._store_analysis_result(item, result)
+                except Exception as e:
+                    api_logger.error(f"처리 실패: {str(e)}")
+                finally:
+                    # 작업 완료 표시
+                    self.queue.task_done()
             except Exception as e:
-                api_logger.error(f"코드 분석 처리 실패: {str(e)}")
-            finally:
-                self.queue.task_done()
-                api_logger.info(f"{item['filename']} 청크 {item['chunk_index']+1}/{item['total_chunks']} 처리 완료")
+                api_logger.error(f"대기 중 오류: {str(e)}")
+        
+        api_logger.info("예정된 모든 작업 처리 완료")
     
     async def _fetch_reference_files(self, item: Dict):
         """메타데이터에서 참조 파일 정보 추출 및 가져오기"""

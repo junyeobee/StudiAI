@@ -12,7 +12,6 @@ import json
 import hmac
 import hashlib
 import asyncio
-import time
 
 class GitHubWebhookHandler:
     """GitHub 웹훅 처리를 담당하는 핸들러 클래스"""
@@ -228,8 +227,10 @@ class GitHubWebhookHandler:
         asyncio.create_task(poll_reference_requests())
     
     async def _start_queue_worker(self, analysis_service: CodeAnalysisService):
-        """분석 큐 처리 워커 시작 (타임아웃 포함)"""
-        await analysis_service.process_queue()  # 5분 타임아웃
+        """분석 큐 작업 처리 - 백그라운드 대신 일반 비동기 호출"""
+        api_logger.info("큐 작업 처리 시작")
+        await analysis_service.process_queue()
+        api_logger.info("큐 작업 정상 종료")
     
     async def _analyze_commit(self, github_service: GitHubWebhookService, analysis_service: CodeAnalysisService, 
                              owner: str, repo: str, commit_sha: str, user_id: str):
