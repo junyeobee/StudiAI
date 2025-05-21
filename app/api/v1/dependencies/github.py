@@ -6,7 +6,7 @@ from supabase._async.client import AsyncClient
 from app.services.github_webhook_service import GitHubWebhookService
 from app.api.v1.dependencies.auth import require_user
 from app.utils.logger import api_logger
-import redis
+import redis.asyncio as redis
 from app.services.auth_service import get_integration_token
 
 redis_service = RedisService()

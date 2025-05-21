@@ -181,7 +181,7 @@ class GitHubWebhookHandler:
                 api_logger.error(f"Redis 구독 오류: {str(e)}")
             finally:
                 await pubsub.unsubscribe(reference_channel)
-        
+
         # 백그라운드 태스크로 구독 시작 (별도 실행 필요)
         asyncio.create_task(subscribe_to_channel())
     
