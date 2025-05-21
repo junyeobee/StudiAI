@@ -428,6 +428,7 @@ class CodeAnalysisService:
                     # OpenAI API 파라미터 준비 (이전 요약 포함)
                     prompt = self._prepare_llm_prompt(code, metadata, previous_result, filename)
                     api_logger.info(f"이전 요약을 포함한 프롬프트 준비 완료 (길이: {len(prompt)})")
+                    print(prompt)
                     
                     # TODO: 실제 OpenAI API 호출 구현
                     # 임시 구현
@@ -600,7 +601,7 @@ class CodeAnalysisService:
                     analysis_data["is_continuation"] = True
                     analysis_data["previous_chunk"] = metadata['previous_chunk']
             
-            # Supabase에 저장 (테이블명은 프로젝트에 맞게 조정 필요)
+            # Supabase에 저장 아직 이부분은 없음
             table_name = "code_analysis_results"
             await self.supabase.table(table_name).insert(analysis_data).execute()
             api_logger.info(f"Supabase에 분석 결과 저장 완료: {filename}, 청크 {item['chunk_index']+1}")
