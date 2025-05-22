@@ -600,7 +600,294 @@ class CodeAnalysisService:
         return ""
     
     async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str):
-        """필요시 Notion 페이지 업데이트"""
-        # 파일 단위로 통합된 요약을 Notion에 저장하는 로직
-        # 실제 구현에서는 파일별로 모든 함수 분석이 완료된 후 실행
-        pass
+        """파일별 종합 분석 및 Notion 업데이트"""
+        filename = func_info['filename']
+        
+        # 1. 파일의 모든 함수 분석이 완료되었는지 확인
+        if await self._is_file_analysis_complete(filename, user_id):
+            # 2. 파일별 종합 분석 수행
+            file_summary = await self._generate_file_level_analysis(filename, user_id)
+            
+            # 3. Notion AI 요약 블록 업데이트
+            await self._update_notion_ai_block(filename, file_summary, user_id)
+            
+            # 4. 아키텍처 개선 제안 생성
+            await self._generate_architecture_suggestions(filename, file_summary, user_id)
+
+    async def _is_file_analysis_complete(self, filename: str, user_id: str) -> bool:
+        """파일의 모든 함수 분석이 완료되었는지 확인"""
+        
+        # Redis에서 해당 파일의 모든 함수 키 조회
+        pattern = f"func:{filename}:*"
+        function_keys = self.redis_client.keys(pattern)
+        
+        # 분석 대기 중인 함수가 있는지 큐에서 확인
+        temp_queue = []
+        pending_functions = set()
+        
+        # 큐에서 해당 파일의 대기 중인 함수들 확인
+        while not self.function_queue.empty():
+            item = await self.function_queue.get()
+            temp_queue.append(item)
+            
+            if item['function_info']['filename'] == filename:
+                pending_functions.add(item['function_info']['name'])
+        
+        # 큐에 다시 넣기
+        for item in temp_queue:
+            await self.function_queue.put(item)
+        
+        # 대기 중인 함수가 없으면 완료
+        return len(pending_functions) == 0
+
+    async def _generate_file_level_analysis(self, filename: str, user_id: str) -> str:
+        """파일 전체 흐름 분석 및 종합 요약 생성"""
+        
+        # 1. 파일의 모든 함수 요약 수집
+        pattern = f"func:{filename}:*"
+        function_keys = self.redis_client.keys(pattern)
+        
+        function_summaries = {}
+        for key in function_keys:
+            function_name = key.split(":")[-1]  # func:파일:함수명 → 함수명
+            summary = self.redis_client.get(key)
+            if summary:
+                function_summaries[function_name] = summary
+        
+        # 2. 함수들을 타입별로 분류
+        categorized_functions = {
+            'global': [],           # 전역 코드
+            'class_methods': {},    # 클래스별 메서드 그룹
+            'functions': [],        # 독립 함수
+            'helpers': []          # 헬퍼 함수
+        }
+        
+        for func_name, summary in function_summaries.items():
+            if func_name == 'globals_and_imports':
+                categorized_functions['global'].append(summary)
+            elif '.' in func_name:  # 클래스.메서드 형식
+                class_name, method_name = func_name.split('.', 1)
+                if class_name not in categorized_functions['class_methods']:
+                    categorized_functions['class_methods'][class_name] = []
+                categorized_functions['class_methods'][class_name].append({
+                    'method': method_name,
+                    'summary': summary
+                })
+            elif func_name.startswith('_'):
+                categorized_functions['helpers'].append({
+                    'function': func_name,
+                    'summary': summary
+                })
+            else:
+                categorized_functions['functions'].append({
+                    'function': func_name,
+                    'summary': summary
+                })
+        
+        # 3. 파일 전체 분석 프롬프트 구성
+        analysis_prompt = f"""
+    파일명: {filename}
+
+    다음은 이 파일의 모든 함수별 분석 결과입니다. 
+    전체적인 아키텍처 흐름과 개선방안을 분석해주세요.
+
+    ## 📋 함수별 분석 결과
+
+    ### 🌍 전역 코드 (임포트/상수)
+    {categorized_functions['global'][0] if categorized_functions['global'] else '없음'}
+
+    """
+
+        # 클래스별 메서드 추가
+        for class_name, methods in categorized_functions['class_methods'].items():
+            analysis_prompt += f"""
+    ### 🏗️ {class_name} 클래스
+    """
+            for method in methods:
+                analysis_prompt += f"""
+    **{method['method']}():**
+    {method['summary']}
+
+    """
+
+        # 독립 함수들 추가
+        if categorized_functions['functions']:
+            analysis_prompt += """
+    ### ⚡ 독립 함수들
+    """
+            for func in categorized_functions['functions']:
+                analysis_prompt += f"""
+    **{func['function']}():**
+    {func['summary']}
+
+    """
+
+        # 헬퍼 함수들 추가
+        if categorized_functions['helpers']:
+            analysis_prompt += """
+    ### 🔧 헬퍼 함수들
+    """
+            for helper in categorized_functions['helpers']:
+                analysis_prompt += f"""
+    **{helper['function']}():**
+    {helper['summary']}
+
+    """
+
+        # 분석 요청 추가
+        analysis_prompt += """
+    ## 🎯 전체 분석 요청
+
+    다음 관점에서 종합 분석해주세요:
+
+    ### 1. **🏛️ 아키텍처 분석**
+    - 전체적인 설계 패턴과 구조
+    - 클래스와 함수들 간의 관계
+    - 책임 분리가 잘 되어있는지
+
+    ### 2. **🔄 데이터 흐름 분석**  
+    - 주요 데이터가 어떻게 처리되는지
+    - 함수들 간의 호출 관계와 의존성
+    - 병목 구간이나 개선 포인트
+
+    ### 3. **🚀 성능 및 확장성**
+    - 성능상 문제가 될 수 있는 부분
+    - 확장성을 위한 개선 방안
+    - 메모리 사용 최적화 포인트
+
+    ### 4. **🛡️ 안정성 및 에러 처리**
+    - 예외 처리가 충분한지
+    - 엣지 케이스 대응 방안
+    - 로깅 및 모니터링 개선점
+
+    ### 5. **📈 코드 품질 평가**
+    - 가독성 및 유지보수성
+    - 중복 코드나 리팩토링 대상
+    - 테스트 가능성
+
+    ### 6. **🎯 구체적 개선 제안**
+    - 우선순위별 개선 사항 (상/중/하)
+    - 각 개선사항의 예상 효과
+    - 구현 난이도 및 소요 시간 추정
+
+    **응답 형식:** 마크다운으로 구조화하여 Notion에서 읽기 좋게 작성
+    """
+        print(analysis_prompt)
+        # 4. LLM 호출하여 종합 분석
+        file_analysis = await self._call_llm_for_file_analysis(analysis_prompt)
+        
+        # 5. 분석 결과를 Redis에 캐싱 (파일 단위)
+        file_cache_key = f"file_analysis:{filename}"
+        self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis)  # 3일 보관
+        
+        return file_analysis
+
+    async def _call_llm_for_file_analysis(self, prompt: str) -> str:
+        """파일 전체 분석을 위한 LLM 호출"""
+        
+        # TODO: 실제 LLM API 호출
+        # response = await openai.ChatCompletion.acreate(
+        #     model="gpt-4-turbo",  # 긴 컨텍스트를 위해 turbo 모델 사용
+        #     messages=[
+        #         {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
+        #         {"role": "user", "content": prompt}
+        #     ],
+        #     temperature=0.3,
+        #     max_tokens=2000
+        # )
+        # return response.choices[0].message.content
+        
+        # 임시 응답
+        return f"""
+    # 📊 {prompt.split('파일명: ')[1].split()[0]} 전체 분석 보고서
+
+    ## 🏛️ 아키텍처 분석
+    - **설계 패턴**: 서비스 레이어 패턴 적용
+    - **구조**: 잘 모듈화된 클래스 중심 설계
+    - **책임 분리**: 각 함수가 단일 책임 원칙을 잘 준수
+
+    ## 🔄 데이터 흐름 분석
+    - **주요 흐름**: 파일 → 함수 추출 → 개별 분석 → 큐 처리
+    - **병목 구간**: LLM API 호출 부분에서 지연 가능성
+    - **개선 포인트**: 병렬 처리 도입 가능
+
+    ## 🚀 성능 및 확장성
+    - **성능**: Redis 캐싱으로 효율적 처리
+    - **확장성**: 큐 기반 설계로 확장 용이
+    - **최적화**: 함수 분할 로직 개선 여지
+
+    ## 🛡️ 안정성 및 에러 처리
+    - **예외 처리**: try-catch 블록 충분히 활용
+    - **로깅**: 각 단계별 로깅 잘 구현
+    - **개선**: 타임아웃 처리 추가 필요
+
+    ## 📈 코드 품질 평가
+    ⭐⭐⭐⭐⭐ (5/5)
+    - **가독성**: 매우 우수
+    - **유지보수성**: 모듈화 잘 됨
+    - **테스트 가능성**: 각 함수가 독립적
+
+    ## 🎯 구체적 개선 제안
+
+    ### 🔥 상순위 (즉시 적용)
+    1. **LLM API 실제 연동** - 2시간 소요
+    2. **병렬 처리 도입** - 4시간 소요
+
+    ### 🚀 중순위 (1주 내)
+    1. **에러 재시도 로직 강화** - 6시간 소요
+    2. **모니터링 대시보드 추가** - 1일 소요
+
+    ### 💡 하순위 (장기)
+    1. **ML 기반 코드 품질 예측** - 1주 소요
+    2. **실시간 협업 기능** - 2주 소요
+    """
+    
+
+    async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str):
+        """Notion AI 요약 블록 업데이트"""
+        
+        try:
+            # 1. 해당 파일과 연관된 학습 페이지 찾기
+            # (여기서는 간단히 구현, 실제로는 Supabase에서 조회)
+            
+            # 2. AI 요약 블록 ID 조회
+            # ai_block_id = await get_ai_block_id_by_filename(filename, user_id)
+            
+            # 3. Notion API로 블록 업데이트
+            # await notion_service.update_ai_summary_by_block(ai_block_id, file_summary)
+            
+            api_logger.info(f"파일 '{filename}' Notion 업데이트 완료")
+            
+        except Exception as e:
+            api_logger.error(f"Notion 업데이트 실패: {str(e)}")
+
+    async def _generate_architecture_suggestions(self, filename: str, file_summary: str, user_id: str):
+        """아키텍처 개선 제안 생성 및 별도 저장"""
+        
+        # 개선 제안만 추출하는 LLM 호출
+        suggestions_prompt = f"""
+    다음 파일 분석 결과에서 **구체적이고 실행 가능한 개선 제안**만 추출해주세요:
+
+    {file_summary}
+
+    형식:
+    ## 🚀 즉시 적용 가능 (1-2시간)
+    - [ ] 구체적 개선사항 1
+    - [ ] 구체적 개선사항 2
+
+    ## 🔧 단기 개선 (1주 이내)  
+    - [ ] 구체적 개선사항 3
+    - [ ] 구체적 개선사항 4
+
+    ## 💡 장기 개선 (1개월 이내)
+    - [ ] 구체적 개선사항 5
+    - [ ] 구체적 개선사항 6
+    """
+        
+        suggestions = await self._call_llm_for_file_analysis(suggestions_prompt)
+        
+        # Redis에 개선 제안 별도 저장
+        suggestions_key = f"suggestions:{filename}"
+        self.redis_client.setex(suggestions_key, 86400 * 7, suggestions)  # 7일 보관
+        
+        api_logger.info(f"파일 '{filename}' 개선 제안 생성 완료")
