@@ -551,7 +551,7 @@ class CodeAnalysisService:
         #     temperature=0.3
         # )
         # return response.choices[0].message.content
-        
+        print(full_prompt)
         # 임시 응답
         return f"[LLM 분석 결과] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
     
