@@ -256,7 +256,7 @@ class CodeAnalysisService:
             # 변경된 블록이 없으면 전체 파일을 반환
             if not blocks:
                 return [{"code": file_content, "type": "full_file"}]
-                
+            print(blocks)
             return blocks
             
         except SyntaxError as e:
