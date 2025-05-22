@@ -1,3 +1,4 @@
+
 from redis import Redis
 from supabase._async.client import AsyncClient
 from typing import Dict, List, Any, Tuple, Optional
@@ -6,794 +7,600 @@ import asyncio
 import re
 import json
 import time
+import ast
+import hashlib
 
 class CodeAnalysisService:
-    """코드 분석 및 LLM 처리를 담당하는 서비스"""
+    """함수 중심 코드 분석 및 LLM 처리 서비스"""
     def __init__(self, redis_client: Redis, supabase: AsyncClient):
         self.redis_client = redis_client
         self.supabase = supabase
-        self.queue = asyncio.Queue()  # 비동기 큐
+        self.function_queue = asyncio.Queue()  # 함수별 분석 큐
     
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
-        """코드 변경 분석 진입점"""
-        api_logger.info(f"분석할 파일 수: {len(files)}")
-        tasks = []
-        processed_count = 0  # 처리된 파일 수
-
-        for i, file in enumerate(files):
-            # 패치 또는 전체 내용이 없으면 건너뛰기
+        """코드 변경 분석 진입점 - 함수 중심으로 재설계"""
+        api_logger.info(f"함수별 분석 시작: {len(files)}개 파일")
+        
+        for file in files:
+            filename = file.get('filename', 'unknown')
+            
             if "patch" not in file and "full_content" not in file:
-                api_logger.info(f"파일 {i+1}/{len(files)} '{file.get('filename', 'unknown')}': 패치/내용 없음, 건너뜀")
+                api_logger.info(f"파일 '{filename}': 분석할 내용 없음, 건너뜀")
                 continue
-                
-            # 전체 파일 내용이 있으면 우선 사용, 없으면 패치 사용
+            
+            # 전체 파일 내용과 변경 정보 추출
             if "full_content" in file:
-                # 전체 파일 내용 사용
-                code_to_analyze = file["full_content"]
-                
-                # 패치 정보가 있으면 변경 라인 번호 추출
-                changed_lines = []
-                if "patch" in file:
-                    changed_lines = self._extract_changed_lines(file["patch"])
-                    api_logger.info(f"파일 '{file['filename']}' 변경 라인 추출: {len(changed_lines)} 라인")
-                
-                api_logger.info(f"파일 '{file['filename']}' 전체 내용 분석 (길이: {len(code_to_analyze)})")
-                
-                # 변경된 라인을 함수/클래스 단위로 매핑
-                code_blocks = self._map_changes_to_functions(code_to_analyze, file["filename"], changed_lines)
-                
+                file_content = file["full_content"]
+                diff_info = self._extract_detailed_diff(file.get("patch", "")) if "patch" in file else {}
             else:
-                # 패치에서 실제 코드만 추출 (이전 방식)
-                code_to_analyze, changed_lines = self._parse_patch(file["patch"])
-                api_logger.info(f"파일 '{file['filename']}' 패치 내용 분석 (패치 길이: {len(file['patch'])}, 추출 코드 길이: {len(code_to_analyze)})")
-                code_blocks = [{"code": code_to_analyze, "type": "patch_only"}]
-               
-            processed_count += 1
+                file_content, diff_info = self._parse_patch_with_context(file["patch"])
             
-            # 각 코드 블록에 대해 분석 작업 등록
-            for block in code_blocks:
-                tasks.append(self._enqueue_code_analysis(
-                    block["code"], 
-                    file["filename"],
-                    commit_sha, 
-                    user_id,
-                    block.get("metadata", {})
-                ))
-        
-        api_logger.info(f"총 {len(files)}개 파일 중 {processed_count}개 파일 분석 작업 등록됨")
-        if tasks:
-            await asyncio.gather(*tasks)
-            api_logger.info("모든 코드 분석 작업이 큐에 추가됨")
-        else:
-            api_logger.warning("분석할 파일이 없습니다 - 큐에 작업이 추가되지 않음")
+            # 파일을 함수 단위로 분해
+            functions = await self._extract_functions_from_file(file_content, filename, diff_info)
+            
+            # 각 함수를 분석 큐에 추가
+            for func_info in functions:
+                await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
+            
+            api_logger.info(f"파일 '{filename}': {len(functions)}개 함수 분석 큐에 추가")
     
-    def _extract_changed_lines(self, patch: str) -> List[int]:
-        """
-        diff 패치에서 변경된 라인 번호 추출
-        @@ -a,b +c,d @@ 형식의 헤더에서 +c,d 부분 분석하여 변경된 라인 번호 목록 반환
-        """
-        changed_lines = []
+    def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
+        """diff 패치에서 상세 변경 정보 추출"""
+        changes = {}
         current_line = 0
         
-        for line in patch.splitlines():
-            # @@ -a,b +c,d @@ 형식 찾기
-            hunk_header = re.match(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
-            if hunk_header:
-                # 새 파일에서의 시작 라인 번호
-                current_line = int(hunk_header.group(1))
+        lines = patch.splitlines()
+        i = 0
+        
+        while i < len(lines):
+            line = lines[i]
+            
+            # @@ -a,b +c,d @@ 형식 헤더 찾기
+            hunk_match = re.match(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
+            if hunk_match:
+                current_line = int(hunk_match.group(1))
+                i += 1
                 continue
-                
-            # 추가된 라인(+로 시작)이나 변경된 라인(+나 - 없는 문맥 라인)
-            if line.startswith('+'):
-                changed_lines.append(current_line)
+            
+            # 삭제된 라인
+            if line.startswith('-') and not line.startswith('---'):
+                old_code = line[1:]
+                # 다음 라인이 추가 라인인지 확인 (수정)
+                if i + 1 < len(lines) and lines[i + 1].startswith('+'):
+                    new_code = lines[i + 1][1:]
+                    changes[current_line] = {
+                        "type": "modified",
+                        "old": old_code,
+                        "new": new_code
+                    }
+                    i += 2  # 두 라인 모두 처리
+                    current_line += 1
+                else:
+                    changes[current_line] = {
+                        "type": "deleted",
+                        "old": old_code,
+                        "new": ""
+                    }
+                    i += 1
+                continue
+            
+            # 추가된 라인
+            elif line.startswith('+') and not line.startswith('+++'):
+                changes[current_line] = {
+                    "type": "added",
+                    "old": "",
+                    "new": line[1:]
+                }
                 current_line += 1
-            elif not line.startswith('-'):  # 문맥 라인(변경 없음)
+                i += 1
+                continue
+            
+            # 컨텍스트 라인 (변경 없음)
+            else:
                 current_line += 1
-                
-        return changed_lines
+                i += 1
+        
+        return changes
     
-    def _parse_patch(self, patch: str) -> Tuple[str, List[int]]:
-        """
-        패치 내용 파싱: 코드와 변경 라인 번호 동시에 추출
+    def _parse_patch_with_context(self, patch: str) -> Tuple[str, Dict[int, Dict]]:
+        """패치에서 코드와 변경 정보 동시 추출"""
+        diff_info = self._extract_detailed_diff(patch)
         
-        1) 메타줄 (diff/index/---/+++/@@) 제거
-        2) + / - 접두어 제거
-        3) 앞뒤 공백·탭 제거
-        4) 변경 라인 번호 추출
+        # 패치에서 최종 코드 상태 재구성
+        lines = []
+        current_line = 1
         
-        Returns:
-            Tuple[str, List[int]]: (정제된 코드, 변경된 라인 번호 목록)
-        """
-        cleaned = []
-        changed_lines = []
-        current_line = 0
-        
-        for line in patch.splitlines():
-            # @@ -a,b +c,d @@ 형식 찾기
-            hunk_header = re.match(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
-            if hunk_header:
-                # 새 파일에서의 시작 라인 번호
-                current_line = int(hunk_header.group(1))
+        for patch_line in patch.splitlines():
+            if patch_line.startswith(("diff ", "index ", "--- ", "+++ ", "@@")):
                 continue
-                
-            # 메타 줄 건너뛰기
-            if line.startswith(("diff ", "index ", "--- ", "+++ ")):
-                continue
-                
-            # 삭제된 라인(-로 시작)은 건너뛰기
-            if line.startswith('-'):
-                continue
-                
-            # 추가된 라인(+로 시작)
-            if line.startswith('+'):
-                cleaned_line = line[1:].strip()
-                if cleaned_line:  # 빈 줄 아닌 경우만 추가
-                    cleaned.append(cleaned_line)
-                    changed_lines.append(current_line)
-                current_line += 1
-            else:  # 문맥 라인(변경 없음)
-                cleaned_line = line.strip()
-                if cleaned_line:  # 빈 줄 아닌 경우만 추가
-                    cleaned.append(cleaned_line)
-                current_line += 1
-                
-        return "\n".join(cleaned), changed_lines
-        
-    def _map_changes_to_functions(self, file_content: str, filename: str, changed_lines: List[int]) -> List[Dict]:
-        """
-        변경된 라인을 함수/클래스 단위로 매핑
-        
-        Args:
-            file_content: 파일 전체 내용
-            filename: 파일 이름
-            changed_lines: 변경된 라인 번호 목록
             
-        Returns:
-            List[Dict]: 변경이 포함된 코드 블록 목록 (함수/클래스 단위)
-        """
-        if not changed_lines:
-            # 변경 라인이 없으면 전체 파일을 하나의 블록으로 처리
-            return [{"code": file_content, "type": "full_file"}]
-            
-        # 파일 확장자 확인
+            if patch_line.startswith('-'):
+                continue  # 삭제된 라인은 제외
+            elif patch_line.startswith('+'):
+                lines.append(patch_line[1:])  # 추가된 라인
+            else:
+                lines.append(patch_line)  # 컨텍스트 라인
+        
+        return '\n'.join(lines), diff_info
+    
+    async def _extract_functions_from_file(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
+        """파일에서 함수/메서드를 개별적으로 추출"""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''
         
-        # Python 파일인 경우 AST 파서 사용
         if ext == 'py':
-            return self._parse_python_file(file_content, changed_lines)
-        
-        # 다른 언어는 정규식 기반 파싱 사용
-        return self._parse_code_with_regex(file_content, changed_lines, ext)
+            return await self._extract_python_functions(file_content, filename, diff_info)
+        else:
+            return await self._extract_generic_functions(file_content, filename, diff_info, ext)
     
-    def _parse_python_file(self, file_content: str, changed_lines: List[int]) -> List[Dict]:
-        """
-        Python 파일을 AST를 사용하여 파싱하고 변경된 함수/클래스 추출
-        
-        Args:
-            file_content: 파일 전체 내용
-            changed_lines: 변경된 라인 번호 목록
-            
-        Returns:
-            List[Dict]: 변경이 포함된 코드 블록 목록 (함수/클래스 단위)
-        """
-        import ast
+    async def _extract_python_functions(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
+        """Python 파일에서 함수/메서드 개별 추출 (AST 사용)"""
+        functions = []
         
         try:
-            # 파일 내용 파싱
             tree = ast.parse(file_content)
-            
-            # 코드 블록 (함수/클래스) 추출
-            blocks = []
-            
-            # 전체 라인 리스트
             lines = file_content.splitlines()
             
-            # 전역 코드 블록 (임포트, 상수 등)
-            global_lines = []
-            global_changed = False
+            # 전역 임포트 및 상수 수집
+            global_code = []
+            function_lines = set()
             
             for node in ast.walk(tree):
-                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                    # 함수/클래스 정의 추출
-                    start_line = node.lineno
-                    end_line = 0
+                # 클래스 정의 처리
+                if isinstance(node, ast.ClassDef):
+                    class_start = node.lineno
+                    class_end = getattr(node, 'end_lineno', class_start)
                     
-                    # 종료 라인 찾기
-                    for child in ast.walk(node):
-                        if hasattr(child, 'lineno'):
-                            end_line = max(end_line, getattr(child, 'end_lineno', child.lineno))
+                    # 클래스 내 메서드들을 개별 함수로 처리
+                    for item in node.body:
+                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                            method_start = item.lineno
+                            method_end = getattr(item, 'end_lineno', method_start)
+                            
+                            # 메서드 코드 추출
+                            method_code = '\n'.join(lines[method_start-1:method_end])
+                            
+                            # 메서드 관련 변경 사항 찾기
+                            method_changes = {
+                                line_num: change for line_num, change in diff_info.items()
+                                if method_start <= line_num <= method_end
+                            }
+                            
+                            function_name = f"{node.name}.{item.name}"  # 클래스.메서드 형식
+                            
+                            functions.append({
+                                'name': function_name,
+                                'type': 'method',
+                                'code': method_code,
+                                'start_line': method_start,
+                                'end_line': method_end,
+                                'filename': filename,
+                                'class_name': node.name,
+                                'changes': method_changes,
+                                'has_changes': bool(method_changes)
+                            })
+                            
+                            # 함수 라인 기록
+                            function_lines.update(range(method_start, method_end + 1))
+                
+                # 독립 함수 처리
+                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    # 클래스 내부가 아닌 독립 함수만
+                    parent_classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
+                    is_in_class = any(
+                        class_node.lineno <= node.lineno <= getattr(class_node, 'end_lineno', class_node.lineno)
+                        for class_node in parent_classes
+                    )
                     
-                    # 함수/클래스에 변경된 라인이 포함되는지 확인
-                    has_changes = any(start_line <= line <= end_line for line in changed_lines)
-                    
-                    if has_changes:
-                        # 코드 블록 추출
-                        block_code = '\n'.join(lines[start_line-1:end_line])
+                    if not is_in_class:
+                        func_start = node.lineno
+                        func_end = getattr(node, 'end_lineno', func_start)
                         
-                        # 메타데이터 준비
-                        metadata = {
-                            'type': 'class' if isinstance(node, ast.ClassDef) else 'function',
-                            'name': node.name,
-                            'start_line': start_line,
-                            'end_line': end_line,
-                            'changed_lines': [line for line in changed_lines if start_line <= line <= end_line]
+                        func_code = '\n'.join(lines[func_start-1:func_end])
+                        
+                        func_changes = {
+                            line_num: change for line_num, change in diff_info.items()
+                            if func_start <= line_num <= func_end
                         }
                         
-                        blocks.append({
-                            'code': block_code,
-                            'type': metadata['type'],
-                            'metadata': metadata
+                        functions.append({
+                            'name': node.name,
+                            'type': 'function',
+                            'code': func_code,
+                            'start_line': func_start,
+                            'end_line': func_end,
+                            'filename': filename,
+                            'changes': func_changes,
+                            'has_changes': bool(func_changes)
                         })
                         
-                    # 전역 영역에서 제외할 라인 표시
-                    for i in range(start_line-1, end_line):
-                        if i < len(lines):
-                            global_lines.append(i)
+                        function_lines.update(range(func_start, func_end + 1))
             
-            # 변경된 전역 코드 확인 (함수/클래스 외부)
-            global_changed_lines = [line for line in changed_lines if line-1 not in global_lines and line-1 < len(lines)]
+            # 전역 코드 (임포트, 상수 등) 처리
+            global_lines = []
+            global_changes = {}
             
-            if global_changed_lines:
-                # 전역 코드 추출 (임포트 등)
-                global_code = []
-                for i, line in enumerate(lines):
-                    if i not in global_lines:
-                        global_code.append(line)
-                        if i+1 in changed_lines:
-                            global_changed = True
-                
-                if global_changed:
-                    blocks.insert(0, {
-                        'code': '\n'.join(global_code),
-                        'type': 'global',
-                        'metadata': {
-                            'type': 'global',
-                            'name': 'imports_and_globals',
-                            'changed_lines': global_changed_lines
-                        }
-                    })
+            for i, line in enumerate(lines, 1):
+                if i not in function_lines:
+                    global_lines.append(line)
+                    if i in diff_info:
+                        global_changes[i] = diff_info[i]
             
-            # 변경된 블록이 없으면 전체 파일을 반환
-            if not blocks:
-                return [{"code": file_content, "type": "full_file"}]
-            print(blocks)
-            return blocks
+            if global_lines or global_changes:
+                functions.insert(0, {
+                    'name': 'globals_and_imports',
+                    'type': 'global',
+                    'code': '\n'.join(global_lines),
+                    'start_line': 1,
+                    'end_line': len(lines),
+                    'filename': filename,
+                    'changes': global_changes,
+                    'has_changes': bool(global_changes)
+                })
+            
+            return functions
             
         except SyntaxError as e:
-            # 파싱 에러 발생 시 전체 파일을 하나의 블록으로 처리
-            api_logger.error(f"Python 파일 파싱 에러: {str(e)}")
-            return [{"code": file_content, "type": "full_file"}]
+            api_logger.error(f"Python 파일 파싱 오류: {e}")
+            # 파싱 실패 시 전체 파일을 하나의 함수로 처리
+            return [{
+                'name': 'entire_file',
+                'type': 'file',
+                'code': file_content,
+                'start_line': 1,
+                'end_line': len(file_content.splitlines()),
+                'filename': filename,
+                'changes': diff_info,
+                'has_changes': bool(diff_info)
+            }]
     
-    def _parse_code_with_regex(self, file_content: str, changed_lines: List[int], ext: str) -> List[Dict]:
-        """
-        정규식을 사용하여 코드 블록 추출 및 변경 라인 매핑
-        
-        Args:
-            file_content: 파일 전체 내용
-            changed_lines: 변경된 라인 번호 목록
-            ext: 파일 확장자
-            
-        Returns:
-            List[Dict]: 변경이 포함된 코드 블록 목록
-        """
-        # 언어별 패턴 매핑
-        lang_patterns = {
-            # JavaScript/TypeScript
-            'js': [
-                # 함수 (화살표 함수 포함)
-                r'(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+)\s*=\s*(?:async\s+)?(?:function|\([^)]*\)\s*=>))[^{]*\{(?:[^{}]|(?R))*\}',
-                # 클래스
-                r'class\s+(\w+)[^{]*\{(?:[^{}]|(?R))*\}'
-            ],
-            'ts': [
-                # 함수 (화살표 함수 포함)
-                r'(?:async\s+)?(?:function\s+(\w+)|const\s+(\w+)\s*=\s*(?:async\s+)?(?:function|\([^)]*\)\s*=>))[^{]*\{(?:[^{}]|(?R))*\}',
-                # 클래스
-                r'class\s+(\w+)[^{]*\{(?:[^{}]|(?R))*\}'
-            ],
-            # Java
-            'java': [
-                # 메서드
-                r'(?:public|private|protected|static|final|native|synchronized|abstract|transient)\s+[\w\<\>\[\]]+\s+(\w+)\([^\)]*\)(?:\s+throws\s+[\w\s,]+)?\s*\{(?:[^{}]|(?R))*\}',
-                # 클래스
-                r'(?:public|private|protected|static|final|abstract)\s+class\s+(\w+)[^{]*\{(?:[^{}]|(?R))*\}'
-            ],
-            # 기본 C 스타일 언어 패턴
-            'default': [
-                # 함수
-                r'\w+\s+(\w+)\s*\([^)]*\)\s*\{(?:[^{}]|(?R))*\}',
-                # 클래스/구조체
-                r'(?:class|struct)\s+(\w+)[^{]*\{(?:[^{}]|(?R))*\}'
-            ]
-        }
-        
-        # 파일 타입에 맞는 패턴 선택
-        patterns = lang_patterns.get(ext, lang_patterns['default'])
-        
-        # 전체 라인 리스트
+    async def _extract_generic_functions(self, file_content: str, filename: str, diff_info: Dict, ext: str) -> List[Dict]:
+        """일반 언어의 함수 추출 (정규식 기반)"""
+        functions = []
         lines = file_content.splitlines()
         
-        # 코드 블록 추출
-        blocks = []
-        matched_lines = set()
+        # 언어별 함수 패턴
+        patterns = {
+            'js': r'(?:function\s+(\w+)|const\s+(\w+)\s*=.*?function|(\w+)\s*:\s*(?:async\s+)?function)',
+            'ts': r'(?:function\s+(\w+)|const\s+(\w+)\s*=.*?function|(\w+)\s*:\s*(?:async\s+)?function)',
+            'java': r'(?:public|private|protected)?\s*(?:static\s+)?[\w<>]+\s+(\w+)\s*\(',
+            'c': r'[\w\*\s]+\s+(\w+)\s*\([^)]*\)\s*\{',
+            'cpp': r'[\w\*\s:]+\s+(\w+)\s*\([^)]*\)\s*\{',
+        }
         
-        for pattern in patterns:
-            for match in re.finditer(pattern, file_content, re.DOTALL):
-                # 블록 위치 계산
-                block_text = match.group(0)
-                block_start = file_content[:match.start()].count('\n') + 1
-                block_end = block_start + block_text.count('\n')
-                
-                # 블록 이름 추출 (첫 번째 캡처 그룹)
-                name = next((g for g in match.groups() if g), "unnamed")
-                
-                # 블록에 변경된 라인이 포함되는지 확인
-                block_changed_lines = [line for line in changed_lines if block_start <= line <= block_end]
-                
-                if block_changed_lines:
-                    # 블록 코드 추출
-                    block_code = '\n'.join(lines[block_start-1:block_end])
-                    
-                    # 메타데이터 준비
-                    block_type = 'class' if re.search(r'(class|struct|interface)', block_text[:50]) else 'function'
-                    metadata = {
-                        'type': block_type,
-                        'name': name,
-                        'start_line': block_start,
-                        'end_line': block_end,
-                        'changed_lines': block_changed_lines
-                    }
-                    
-                    blocks.append({
-                        'code': block_code,
-                        'type': block_type,
-                        'metadata': metadata
-                    })
-                    
-                    # 매칭된 라인 기록
-                    matched_lines.update(range(block_start, block_end + 1))
+        pattern = patterns.get(ext, r'[\w\s]+\s+(\w+)\s*\([^)]*\)\s*\{')
         
-        # 매칭되지 않은 라인 중 변경된 라인이 있는지 확인
-        unmatched_changed_lines = [line for line in changed_lines if line not in matched_lines]
-        
-        if unmatched_changed_lines:
-            # 변경된 라인 주변 컨텍스트 추출 (앞뒤 10줄)
-            context_blocks = []
+        for match in re.finditer(pattern, file_content, re.MULTILINE):
+            func_name = next((g for g in match.groups() if g), "unknown")
+            func_start_pos = match.start()
             
-            for line in unmatched_changed_lines:
-                if line < 1 or line > len(lines):
-                    continue
-                    
-                start = max(1, line - 10)
-                end = min(len(lines), line + 10)
+            # 함수 시작 라인 계산
+            func_start_line = file_content[:func_start_pos].count('\n') + 1
+            
+            # 중괄호 매칭으로 함수 끝 찾기
+            func_end_line = self._find_function_end(file_content, func_start_pos)
+            
+            if func_end_line > func_start_line:
+                func_code = '\n'.join(lines[func_start_line-1:func_end_line])
                 
-                # 이미 추가된 블록과 겹치는지 확인
-                overlap = False
-                for block in context_blocks:
-                    if block['start'] <= line <= block['end']:
-                        overlap = True
-                        break
+                func_changes = {
+                    line_num: change for line_num, change in diff_info.items()
+                    if func_start_line <= line_num <= func_end_line
+                }
                 
-                if not overlap:
-                    context_blocks.append({
-                        'code': '\n'.join(lines[start-1:end]),
-                        'type': 'context',
-                        'start': start,
-                        'end': end,
-                        'metadata': {
-                            'type': 'context',
-                            'name': f'context_around_line_{line}',
-                            'start_line': start,
-                            'end_line': end,
-                            'changed_lines': [l for l in unmatched_changed_lines if start <= l <= end]
-                        }
-                    })
-            
-            blocks.extend(context_blocks)
-        
-        # 변경된 블록이 없으면 전체 파일을 반환
-        if not blocks:
-            return [{"code": file_content, "type": "full_file"}]
-            
-        return blocks
-    
-    def _split_code_if_needed(self, code: str) -> List[str]:
-        """코드가 너무 길면 여러 청크로 분할
-        
-        1. 함수/클래스 단위로 분할
-        2. 개별 함수/클래스가 길면 여러 청크로 재분할
-        3. 청크 간 연속성을 위한 메타데이터 포함
-        """
-        max_length = 3000  # 청크 최대 길이
-        
-        if len(code) <= max_length:
-            return [code]
-            
-        # 코드 블록(함수/클래스) 패턴 (다중 언어 지원)
-        # Python, JavaScript, TypeScript, Java, C#, C++, PHP 등 대부분의 언어에서 작동
-        block_patterns = [
-            # 함수 패턴 (def, function, public/private void 등)
-            r'((?:def|function|async function|public|private|protected|static|void|int|string|bool|final)\s+\w+\s*\([^)]*\)\s*(?:\{|:)(?:.|\n)*?)(?=\n\s*(?:def|function|class|public|private|protected|static|void|int|string|bool|final)\s+|\Z)',
-            # 클래스 패턴
-            r'((?:class|interface|abstract class|struct)\s+\w+(?:\s+(?:extends|implements)\s+[^{]+)?\s*\{(?:.|\n)*?)(?=\n\s*(?:def|function|class|interface|abstract|public|private)\s+|\Z)'
-        ]
-        
-        # 코드 블록 추출
-        blocks = []
-        remaining_code = code
-        
-        for pattern in block_patterns:
-            matches = re.finditer(pattern, remaining_code, re.MULTILINE)
-            for match in matches:
-                blocks.append({
-                    'code': match.group(0),
-                    'start': match.start(),
-                    'end': match.end(),
-                    'type': 'function' if not match.group(0).strip().startswith(('class', 'interface', 'abstract class', 'struct')) else 'class'
+                functions.append({
+                    'name': func_name,
+                    'type': 'function',
+                    'code': func_code,
+                    'start_line': func_start_line,
+                    'end_line': func_end_line,
+                    'filename': filename,
+                    'changes': func_changes,
+                    'has_changes': bool(func_changes)
                 })
         
-        # 시작 위치에 따라 블록 정렬
-        blocks.sort(key=lambda x: x['start'])
-        
-        # 함수/클래스로 매칭되지 않은 코드 처리 (임포트, 주석, 전역 변수 등)
-        if not blocks:
-            # 매칭된 블록이 없으면 단순 길이 기반 분할
-            return [code[i:i+max_length] for i in range(0, len(code), max_length)]
-        
-        # 블록 사이의 코드도 포함시키기
-        complete_blocks = []
-        last_end = 0
-        
-        for block in blocks:
-            if block['start'] > last_end:
-                # 블록 사이의 코드가 있으면 별도 블록으로 추가
-                complete_blocks.append({
-                    'code': remaining_code[last_end:block['start']],
-                    'type': 'other'
-                })
-            complete_blocks.append(block)
-            last_end = block['end']
-        
-        # 마지막 블록 이후 코드가 있으면 추가
-        if last_end < len(remaining_code):
-            complete_blocks.append({
-                'code': remaining_code[last_end:],
-                'type': 'other'
+        # 함수가 없으면 전체 파일을 하나의 단위로 처리
+        if not functions:
+            functions.append({
+                'name': 'entire_file',
+                'type': 'file',
+                'code': file_content,
+                'start_line': 1,
+                'end_line': len(lines),
+                'filename': filename,
+                'changes': diff_info,
+                'has_changes': bool(diff_info)
             })
         
-        # 각 블록을 적절한 크기로 분할하고 메타데이터 추가
-        chunks = []
-        for block in complete_blocks:
-            block_code = block['code']
-            
-            # 블록이 max_length보다 작으면 바로 추가
-            if len(block_code) <= max_length:
-                chunks.append(block_code)
-                continue
-            
-            # 블록 이름 추출 (함수/클래스명)
-            block_name = "unknown"
-            if block['type'] in ['function', 'class']:
-                name_match = re.search(r'(?:def|function|class|interface|public|private|protected|static|void|int|string|bool)\s+(\w+)', block_code)
-                if name_match:
-                    block_name = name_match.group(1)
-            
-            # 블록을 여러 청크로 분할
-            block_chunks = []
-            for i in range(0, len(block_code), max_length):
-                chunk = block_code[i:i+max_length]
-                
-                # 첫 번째 청크가 아니면 이전 청크와의 연결성을 위한 메타데이터 추가
-                if i > 0:
-                    # 이전 청크 요약 참조를 위한 주석 추가
-                    summary_reference = f"# {block['type']} {block_name}[청크 {i//max_length}] - 이전 청크에서 계속됨\n"
-                    chunk = summary_reference + chunk
-                
-                # 마지막 청크가 아니면 계속된다는 표시 추가
-                if i + max_length < len(block_code):
-                    continuation_note = f"\n# {block['type']} {block_name} - 다음 청크에서 계속됨"
-                    chunk = chunk + continuation_note
-                
-                block_chunks.append(chunk)
-            
-            chunks.extend(block_chunks)
+        return functions
+    
+    def _find_function_end(self, content: str, start_pos: int) -> int:
+        """중괄호 매칭으로 함수 끝 위치 찾기"""
+        brace_count = 0
+        i = start_pos
+        found_first_brace = False
         
-        return chunks
-    
-    async def _enqueue_code_analysis(self, code: str, filename: str, commit_sha: str, user_id: str, metadata: Dict = {}):
-        """코드 분석 작업을 큐에 넣음"""
-        # 코드가 길면 적절히 분할
-        api_logger.info(f"'{filename}' 코드 분할 시작 (길이: {len(code)})")
-        chunks = self._split_code_if_needed(code)
-        api_logger.info(f"'{filename}' 분할 결과: {len(chunks)}개 청크")
+        while i < len(content):
+            char = content[i]
+            if char == '{':
+                brace_count += 1
+                found_first_brace = True
+            elif char == '}':
+                brace_count -= 1
+                if found_first_brace and brace_count == 0:
+                    return content[:i+1].count('\n') + 1
+            i += 1
         
-        # 메타데이터에서 기존 청크 정보 추출
-        existing_metadata = metadata.copy()
+        return content[:start_pos].count('\n') + 10  # 기본값
+    
+    async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, owner: str, repo: str):
+        """함수별 분석 작업을 큐에 추가"""
+        # 메타데이터에서 참조 정보 추출
+        metadata = self._extract_function_metadata(func_info['code'])
         
-        for i, chunk in enumerate(chunks):
-            # 청크별 메타데이터 생성
-            chunk_metadata = existing_metadata.copy()
-            
-            # 각 청크에서 추가 메타데이터 추출 (주석 기반)
-            extracted_metadata = self._extract_metadata(chunk)
-            chunk_metadata.update(extracted_metadata)
-            
-            # 여러 청크로 분할된 경우 연속성 메타데이터 추가
-            if len(chunks) > 1:
-                if i > 0:  # 첫 번째 청크가 아니면
-                    chunk_metadata['is_continuation'] = True
-                    chunk_metadata['previous_chunk'] = i - 1
-                
-                if i < len(chunks) - 1:  # 마지막 청크가 아니면
-                    chunk_metadata['has_next_chunk'] = True
-                    chunk_metadata['next_chunk'] = i + 1
-            
-            await self.queue.put({
-                "code": chunk,
-                "metadata": chunk_metadata,
-                "filename": filename,
-                "commit_sha": commit_sha,
-                "user_id": user_id,
-                "chunk_index": i,
-                "total_chunks": len(chunks)
-            })
-            api_logger.info(f"'{filename}' 청크 {i+1}/{len(chunks)} 큐에 추가됨 (길이: {len(chunk)})")
+        analysis_item = {
+            'function_info': func_info,
+            'commit_sha': commit_sha,
+            'user_id': user_id,
+            'owner': owner,
+            'repo': repo,
+            'metadata': metadata
+        }
+        
+        await self.function_queue.put(analysis_item)
+        api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨")
     
-    async def process_queue(self):
-        """큐에 쌓인 코드 분석 작업을 모두 처리하고 종료"""
-        api_logger.info("코드 분석 큐 처리 시작")
-        while not self.queue.empty():
-            try:
-                item = await self.queue.get()
-                await self._process_code_analysis(item)
-                self.queue.task_done()
-            except Exception as e:
-                api_logger.error(f"큐 처리 중 오류 발생: {str(e)}")
-                continue
-        api_logger.info("모든 큐 항목 처리 완료")
-    
-    async def _process_code_analysis(self, item: Dict):
-        """개별 코드 분석 항목 처리"""
-        try:
-            # 참조 파일 가져오기 (있을 경우)
-            await self._fetch_reference_files(item)
-            
-            # 코드 분석 요청 준비
-            code = item['code']
-            filename = item['filename']
-            metadata = item.get('metadata', {})
-            chunk_index = item.get('chunk_index', 0)
-            total_chunks = item.get('total_chunks', 1)
-            
-            # 파일 확장자 추출
-            ext = filename.split('.')[-1].lower() if '.' in filename else ''
-            
-            # 프롬프트 구성
-            system_prompt = f"""다음 코드 청크를 분석하고 요약해주세요.
-파일명: {filename}
-청크: {chunk_index + 1}/{total_chunks}
-
-요약 지침:
-1. 코드의 목적과 기능을 명확히 설명하세요.
-2. 주요 클래스, 함수, 변수의 역할을 설명하세요.
-3. 로직 흐름을 간략히 설명하세요.
-4. 에러 처리나 중요한 예외 상황을 언급하세요.
-
-"""
-            
-            # 메타데이터에 따른 추가 프롬프트
-            if 'type' in metadata:
-                if metadata['type'] == 'function':
-                    system_prompt += f"\n이 코드는 '{metadata['name']}' 함수를 포함하고 있습니다."
-                elif metadata['type'] == 'class':
-                    system_prompt += f"\n이 코드는 '{metadata['name']}' 클래스를 포함하고 있습니다."
-                elif metadata['type'] == 'global':
-                    system_prompt += "\n이 코드는 전역 영역(임포트, 상수 정의 등)을 포함하고 있습니다."
-            
-            if 'changed_lines' in metadata and metadata['changed_lines']:
-                lines = code.splitlines()
-                changed_lines_text = "\n\n변경된 라인:\n"
-                
-                for line_num in metadata['changed_lines']:
-                    if 0 <= line_num - metadata.get('start_line', 1) < len(lines):
-                        line_idx = line_num - metadata.get('start_line', 1)
-                        if line_idx < len(lines):
-                            changed_lines_text += f"{line_num}: {lines[line_idx]}\n"
-                
-                system_prompt += changed_lines_text
-                system_prompt += "\n특히 위의 변경된 라인의 목적과 영향에 초점을 맞추어 설명해주세요."
-            
-            # 참조 파일 정보 추가
-            if 'reference_content' in metadata:
-                system_prompt += f"\n\n참조 파일({metadata['reference_file']})을 고려하여 분석하세요."
-            print(system_prompt)
-            api_logger.info(f"'{filename}' 청크 {chunk_index+1}/{total_chunks} 처리 시작")
-            
-            # TODO: 실제 LLM 호출 구현
-            # LLM 분석 결과
-            analysis_result = "LLM 분석 결과가 여기에 들어갑니다."
-            
-            # 결과 저장
-            await self._save_analysis_result(item, analysis_result)
-            
-            api_logger.info(f"'{filename}' 청크 {chunk_index+1}/{total_chunks} 처리 완료")
-            
-        except Exception as e:
-            api_logger.error(f"코드 분석 처리 중 오류: {str(e)}")
-    
-    def _extract_metadata(self, code: str) -> Dict[str, Any]:
-        """코드 청크에서 메타데이터 추출"""
+    def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
+        """함수 코드에서 메타데이터 추출"""
         metadata = {}
         
-        # 주석에서 메타데이터 추출 로직
-        lines = code.split('\n')
-        for i, line in enumerate(lines):
+        for i, line in enumerate(code.splitlines()[:10]):  # 첫 10줄만 검사
             line = line.strip()
             if line.startswith('#'):
-                # 청크 연속성 메타데이터 처리
-                chunk_continuation = re.search(r'(function|class)\s+(\w+)\[청크\s+(\d+)\]\s*-\s*이전\s+청크에서\s+계속됨', line)
-                if chunk_continuation:
-                    block_type = chunk_continuation.group(1)
-                    block_name = chunk_continuation.group(2)
-                    chunk_index = int(chunk_continuation.group(3))
-                    metadata['is_continuation'] = True
-                    metadata['block_type'] = block_type
-                    metadata['block_name'] = block_name
-                    metadata['previous_chunk'] = chunk_index - 1
-                    # 첫 번째 주석이 연속성 표시면 다음 주석으로 넘어감
-                    continue
+                # #[참조파일.py]{리턴타입}(요구사항) 형식 파싱
+                pattern = r'#\[([^\]]+)\]\{([^}]+)\}\(([^)]+)\)(.*)'
+                match = re.match(pattern, line)
+                if match:
+                    metadata['reference_file'] = match.group(1)
+                    metadata['return_type'] = match.group(2)
+                    metadata['requirements'] = match.group(3)
+                    metadata['custom_prompt'] = match.group(4).strip()
+                    break
                 
-                # 다음 청크로 계속됨 표시 처리
-                next_chunk = re.search(r'(function|class)\s+(\w+)\s*-\s*다음\s+청크에서\s+계속됨', line)
-                if next_chunk:
-                    block_type = next_chunk.group(1)
-                    block_name = next_chunk.group(2)
-                    metadata['has_next_chunk'] = True
-                    metadata['block_type'] = block_type
-                    metadata['block_name'] = block_name
-                    continue
-                
-                # [파일경로] 형식 추출
-                if '[' in line and ']' in line:
-                    match = re.search(r'\[(.*?)\]', line)
-                    if match:
-                        metadata['reference_file'] = match.group(1)
-                
-                # {응답 형식} 형식 추출
-                if '{' in line and '}' in line:
-                    match = re.search(r'\{(.*?)\}', line)
-                    if match:
-                        metadata['response_format'] = match.group(1)
-                
-                # (요구사항) 형식 추출
-                if '(' in line and ')' in line:
-                    match = re.search(r'\((.*?)\)', line)
-                    if match:
-                        metadata['requirements'] = match.group(1)
-                
-                # 일반 주석 텍스트
-                metadata['comment'] = line.lstrip('#').strip()
-                # 첫 번째 일반 주석만 처리하고 중단 (연속성 표시는 제외)
-                break
+                # 단순 참조 파일만 있는 경우: #[파일.py]
+                ref_match = re.search(r'\[([^\]]+\.py)\]', line)
+                if ref_match:
+                    metadata['reference_file'] = ref_match.group(1)
         
         return metadata
     
-    async def _save_analysis_result(self, item: Dict, analysis_result: str):
-        """분석 결과 저장"""
-        try:
-            # 분석 결과 메타데이터
-            result_data = {
-                "user_id": item["user_id"],
-                "commit_sha": item["commit_sha"],
-                "filename": item["filename"],
-                "chunk_index": item.get("chunk_index", 0),
-                "total_chunks": item.get("total_chunks", 1),
-                "analysis": analysis_result,
-                "created_at": time.strftime("%Y-%m-%d %H:%M:%S")
-            }
-            
-            # 메타데이터에서 중요 정보 추출
-            metadata = item.get("metadata", {})
-            if "type" in metadata:
-                result_data["block_type"] = metadata["type"]
-            if "name" in metadata:
-                result_data["block_name"] = metadata["name"]
-            if "changed_lines" in metadata:
-                result_data["changed_lines"] = metadata["changed_lines"]
-            
-            # Supabase에 저장
-            result = await self.supabase.table("code_analysis_results").insert(result_data).execute()
-            
-            # Redis에도 캐싱
-            cache_key = f"analysis:{item['user_id']}:{item['commit_sha']}:{item['filename']}:{item.get('chunk_index', 0)}"
-            self.redis_client.setex(cache_key, 86400, json.dumps(result_data))  # 24시간 유지
-            
-            api_logger.info(f"분석 결과 저장 완료: {item['filename']} 청크 {item.get('chunk_index', 0)+1}/{item.get('total_chunks', 1)}")
-            
-        except Exception as e:
-            api_logger.error(f"분석 결과 저장 실패: {str(e)}")
+    async def process_queue(self):
+        """함수별 분석 큐 처리"""
+        api_logger.info("함수별 분석 큐 처리 시작")
+        
+        while not self.function_queue.empty():
+            try:
+                item = await self.function_queue.get()
+                await self._analyze_function(item)
+                self.function_queue.task_done()
+            except Exception as e:
+                api_logger.error(f"함수 분석 처리 오류: {e}")
+                continue
+        
+        api_logger.info("모든 함수 분석 완료")
     
-    async def _fetch_reference_files(self, item: Dict):
-        """메타데이터에서 참조 파일 정보 추출 및 가져오기"""
-        metadata = item.get('metadata', {})
-        
-        # 참조 파일 정보가 없으면 처리 필요 없음
-        if 'reference_file' not in metadata:
-            return
-            
-        # Redis에서 이미 가져온 참조 파일인지 확인
-        reference_path = metadata['reference_file']
+    async def _analyze_function(self, item: Dict):
+        """개별 함수 분석 처리"""
+        func_info = item['function_info']
+        func_name = func_info['name']
+        filename = func_info['filename']
         user_id = item['user_id']
-        commit_sha = item['commit_sha']
         
-        cache_key = f"{user_id}:ref:{reference_path}:{commit_sha}"
-        cached_content = self.redis_client.get(cache_key)
+        api_logger.info(f"함수 '{func_name}' 분석 시작")
         
+        # Redis에서 이전 분석 결과 조회
+        redis_key = f"func:{filename}:{func_name}"
+        previous_summary = self.redis_client.get(redis_key)
+        
+        # 참조 파일 내용 가져오기
+        reference_content = None
+        if 'reference_file' in item['metadata']:
+            reference_content = await self._fetch_reference_function(
+                item['metadata']['reference_file'], 
+                item['owner'], 
+                item['repo'], 
+                item['commit_sha']
+            )
+        
+        # 함수가 길면 청크로 분할
+        chunks = self._split_function_if_needed(func_info['code'])
+        
+        if len(chunks) == 1:
+            # 단일 청크 처리
+            summary = await self._call_llm_for_function(
+                func_info, 
+                chunks[0], 
+                item['metadata'], 
+                previous_summary, 
+                reference_content
+            )
+        else:
+            # 다중 청크 연속 처리
+            summary = await self._process_multi_chunk_function(
+                func_info, 
+                chunks, 
+                item['metadata'], 
+                previous_summary, 
+                reference_content
+            )
+        
+        # Redis에 최종 요약 저장
+        self.redis_client.setex(redis_key, 86400 * 7, summary)  # 7일 보관
+        
+        # Notion 업데이트는 파일 단위로 별도 처리
+        await self._update_notion_if_needed(func_info, summary, user_id)
+        
+        api_logger.info(f"함수 '{func_name}' 분석 완료")
+    
+    def _split_function_if_needed(self, code: str, max_length: int = 2000) -> List[str]:
+        """함수가 너무 길면 청크로 분할"""
+        if len(code) <= max_length:
+            return [code]
+        
+        # 단순 길이 기반 분할 (복잡한 정규식 제거)
+        chunks = []
+        for i in range(0, len(code), max_length):
+            chunks.append(code[i:i + max_length])
+        
+        return chunks
+    
+    async def _process_multi_chunk_function(self, func_info: Dict, chunks: List[str], 
+                                          metadata: Dict, previous_summary: str, 
+                                          reference_content: str) -> str:
+        """다중 청크 함수의 연속적 요약 처리"""
+        current_summary = previous_summary
+        
+        for i, chunk in enumerate(chunks):
+            api_logger.info(f"함수 '{func_info['name']}' 청크 {i+1}/{len(chunks)} 처리")
+            
+            # 이전 요약을 포함한 LLM 호출
+            chunk_summary = await self._call_llm_for_function(
+                func_info, 
+                chunk, 
+                metadata, 
+                current_summary,  # 이전 요약 포함
+                reference_content,
+                chunk_index=i,
+                total_chunks=len(chunks)
+            )
+            
+            current_summary = chunk_summary  # 다음 청크에서 사용할 요약 업데이트
+        
+        return current_summary
+    
+    async def _call_llm_for_function(self, func_info: Dict, code: str, metadata: Dict, 
+                                   previous_summary: str = None, reference_content: str = None,
+                                   chunk_index: int = 0, total_chunks: int = 1) -> str:
+        """함수별 LLM 분석 호출"""
+        
+        # 프롬프트 구성
+        prompt_parts = []
+        
+        # 기본 시스템 프롬프트
+        if total_chunks > 1:
+            prompt_parts.append(f"다음은 '{func_info['name']}' 함수의 {chunk_index+1}/{total_chunks} 청크입니다.")
+        else:
+            prompt_parts.append(f"다음은 '{func_info['name']}' 함수의 코드입니다.")
+        
+        # 이전 요약이 있으면 포함
+        if previous_summary:
+            prompt_parts.append(f"\n이전 분석 결과:\n{previous_summary}")
+            if total_chunks > 1:
+                prompt_parts.append("\n위 분석을 바탕으로 다음 코드 청크를 분석하고 통합된 요약을 제공하세요.")
+            else:
+                prompt_parts.append("\n위 분석을 참고하여 변경사항을 중심으로 업데이트된 분석을 제공하세요.")
+        
+        # 참조 파일 내용 포함
+        if reference_content:
+            prompt_parts.append(f"\n참조 함수 코드:\n{reference_content}")
+        
+        # 메타데이터 기반 커스텀 프롬프트
+        if 'custom_prompt' in metadata:
+            prompt_parts.append(f"\n추가 요구사항: {metadata['custom_prompt']}")
+        
+        if 'return_type' in metadata:
+            prompt_parts.append(f"\n예상 반환 타입: {metadata['return_type']}")
+        
+        if 'requirements' in metadata:
+            prompt_parts.append(f"\n구현 요구사항: {metadata['requirements']}")
+        
+        # 변경 사항이 있으면 강조
+        if func_info.get('has_changes', False):
+            changes_text = []
+            for line_num, change in func_info.get('changes', {}).items():
+                if change['type'] == 'modified':
+                    changes_text.append(f"라인 {line_num}: '{change['old']}' → '{change['new']}'")
+                elif change['type'] == 'added':
+                    changes_text.append(f"라인 {line_num}: 추가됨 - '{change['new']}'")
+                elif change['type'] == 'deleted':
+                    changes_text.append(f"라인 {line_num}: 삭제됨 - '{change['old']}'")
+            
+            if changes_text:
+                prompt_parts.append(f"\n🔥 주요 변경사항:\n" + "\n".join(changes_text))
+                prompt_parts.append("\n특히 위 변경사항의 목적과 영향을 중점적으로 분석해주세요.")
+        
+        # 분석할 코드
+        prompt_parts.append(f"\n분석할 코드:\n```{func_info.get('filename', '').split('.')[-1]}\n{code}\n```")
+        
+        # 응답 형식 지정
+        prompt_parts.append("""
+분석 결과를 다음 형식으로 제공하세요:
+1. **기능 요약**: 함수의 핵심 목적을 한 문장으로
+2. **주요 로직**: 핵심 알고리즘이나 처리 흐름
+3. **변경 영향**: (변경사항이 있는 경우) 변경으로 인한 동작 변화
+4. **의존성**: 사용하는 외부 함수나 라이브러리
+5. **개선 제안**: (필요시) 코드 품질 향상 방안
+""")
+        
+        full_prompt = "\n".join(prompt_parts)
+        
+        # TODO: 실제 LLM API 호출 구현
+        # OpenAI API 호출 예시:
+        # response = await openai.ChatCompletion.acreate(
+        #     model="gpt-4",
+        #     messages=[{"role": "user", "content": full_prompt}],
+        #     temperature=0.3
+        # )
+        # return response.choices[0].message.content
+        
+        # 임시 응답
+        return f"[LLM 분석 결과] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
+    
+    async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str) -> str:
+        """참조 파일의 함수 요약을 Redis에서 조회"""
+        # 파일에서 특정 함수가 지정되었는지 확인
+        if '#' in reference_file:
+            file_path, func_name = reference_file.split('#', 1)
+            redis_key = f"func:{file_path}:{func_name}"
+        else:
+            # 파일 전체 참조인 경우 주요 함수들 조회
+            redis_key = f"func:{reference_file}:*"
+        
+        cached_content = self.redis_client.get(redis_key)
         if cached_content:
-            # 캐시에서 참조 파일 내용 가져오기
-            metadata['reference_content'] = cached_content
-            api_logger.info(f"참조 파일 '{reference_path}' 캐시에서 로드됨")
-            return
-            
-        try:
-            # Redis 키-값 방식으로 참조 파일 요청
-            # owner/repo 정보 추출 시도
-            owner_repo = None
-            if '/' in reference_path:
-                parts = reference_path.split('/')
-                if len(parts) >= 2:
-                    # 경로에서 owner/repo 부분 추출 시도
-                    owner_repo = '/'.join(parts[:2])
-            
-            # 고유한 요청 ID 생성
-            request_id = f"{user_id}_{commit_sha}_{int(time.time())}_{item['chunk_index']}"
-            
-            # 참조 파일 요청 데이터 구성
-            request_data = {
-                'path': reference_path,
-                'commit_sha': commit_sha,
-                'request_id': request_id
-            }
-            
-            # 요청 키 설정
-            owner_repo = owner_repo or "unknown"
-            request_key = f"ref_request:{owner_repo}:{user_id}:{request_id}"
-            response_key = f"ref_response:{owner_repo}:{user_id}:{request_id}"
-            
-            # 요청 저장 (5분 유효)
-            self.redis_client.setex(request_key, 300, json.dumps(request_data))
-            api_logger.info(f"참조 파일 '{reference_path}' 요청 등록됨 (ID: {request_id})")
-            
-            # 응답 폴링 (최대 5초)
-            MAX_WAIT_TIME = 5.0  # 5초
-            start_time = time.time()
-            
-            while time.time() - start_time < MAX_WAIT_TIME:
-                # 응답 확인
-                response_data_str = self.redis_client.get(response_key)
-                if response_data_str:
-                    response_data = json.loads(response_data_str)
-                    if response_data.get('status') == 'success':
-                        file_content = response_data.get('content', '')
-                        metadata['reference_content'] = file_content
-                        
-                        # Redis에 참조 파일 내용 캐싱
-                        self.redis_client.setex(cache_key, 86400, file_content)  # 24시간 유지
-                        api_logger.info(f"참조 파일 '{reference_path}' 로드 성공")
-                        break
-                    elif response_data.get('status') == 'error':
-                        metadata['reference_error'] = response_data.get('error', '알 수 없는 오류')
-                        api_logger.error(f"참조 파일 오류: {metadata['reference_error']}")
-                        break
-                
-                # 잠시 대기 후 다시 확인
-                await asyncio.sleep(0.5)
-                
-            # 타임아웃 체크
-            if 'reference_content' not in metadata and 'reference_error' not in metadata:
-                metadata['reference_error'] = '참조 파일 요청 타임아웃'
-                api_logger.error(f"참조 파일 '{reference_path}' 요청 타임아웃")
-                    
-        except Exception as e:
-            api_logger.error(f"참조 파일 '{reference_path}' 처리 실패: {str(e)}")
-            metadata['reference_error'] = str(e)
+            return cached_content
+        
+        # Redis에 없으면 파일 내용 요청 (기존 방식 활용)
+        return await self._request_reference_file_content(reference_file, owner, repo, commit_sha)
+    
+    async def _request_reference_file_content(self, reference_file: str, owner: str, repo: str, commit_sha: str) -> str:
+        """GitHub에서 참조 파일 내용 요청 (기존 방식 유지)"""
+        # 기존 구현과 동일한 Redis 키-값 방식 사용
+        request_id = f"ref_{int(time.time())}_{hash(reference_file) % 1000}"
+        
+        request_data = {
+            'path': reference_file,
+            'commit_sha': commit_sha,
+            'request_id': request_id
+        }
+        
+        request_key = f"ref_request:{owner}:{repo}:{request_id}"
+        response_key = f"ref_response:{owner}:{repo}:{request_id}"
+        
+        self.redis_client.setex(request_key, 300, json.dumps(request_data))
+        
+        # 5초 폴링 대기
+        for _ in range(10):
+            response_str = self.redis_client.get(response_key)
+            if response_str:
+                response_data = json.loads(response_str)
+                if response_data.get('status') == 'success':
+                    return response_data.get('content', '')
+            await asyncio.sleep(0.5)
+        
+        return ""
+    
+    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str):
+        """필요시 Notion 페이지 업데이트"""
+        # 파일 단위로 통합된 요약을 Notion에 저장하는 로직
+        # 실제 구현에서는 파일별로 모든 함수 분석이 완료된 후 실행
+        pass
