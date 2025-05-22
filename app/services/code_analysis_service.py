@@ -606,7 +606,7 @@ class CodeAnalysisService:
             # 참조 파일 정보 추가
             if 'reference_content' in metadata:
                 system_prompt += f"\n\n참조 파일({metadata['reference_file']})을 고려하여 분석하세요."
-            
+            print(system_prompt)
             api_logger.info(f"'{filename}' 청크 {chunk_index+1}/{total_chunks} 처리 시작")
             
             # TODO: 실제 LLM 호출 구현
