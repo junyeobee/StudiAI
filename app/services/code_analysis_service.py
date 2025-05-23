@@ -797,6 +797,7 @@ class CodeAnalysisService:
         # return response.choices[0].message.content
         
         # 임시 응답
+        print(prompt)
         return f"""
     # 📊 {prompt.split('파일명: ')[1].split()[0]} 전체 분석 보고서
 
