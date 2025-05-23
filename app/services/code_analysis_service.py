@@ -42,7 +42,7 @@ class CodeAnalysisService:
             
             # 패치에서 현재 코드 상태 재구성 (전체 파일 내용 대신)
             file_content, _ = self._parse_patch_with_context(file["patch"])
-            
+            print(file_content)
             # 파일을 함수 단위로 분해하고 변경 여부 판단
             functions = await self._extract_functions_from_file(file_content, filename, diff_info)
             
@@ -231,7 +231,7 @@ class CodeAnalysisService:
         api_logger.info(f"파싱 시도 파일: {filename}")
         api_logger.info(f"파일 내용 시작 (repr): {repr(file_content[:100])}")
         api_logger.info(f"파일 내용 전체 길이: {len(file_content)}")
-        
+
         try:
             tree = ast.parse(file_content)
             lines = file_content.splitlines()
