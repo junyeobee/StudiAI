@@ -355,6 +355,7 @@ class CodeAnalysisService:
             }
             
             await self.function_queue.put(analysis_item)
+            
             api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (변경 감지)")
     
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
