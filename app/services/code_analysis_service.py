@@ -1,4 +1,3 @@
-
 from redis import Redis
 from supabase._async.client import AsyncClient
 from typing import Dict, List, Any, Tuple, Optional
@@ -8,7 +7,6 @@ import re
 import json
 import time
 import ast
-import hashlib
 
 class CodeAnalysisService:
     """함수 중심 코드 분석 및 LLM 처리 서비스"""
@@ -45,7 +43,7 @@ class CodeAnalysisService:
             api_logger.info(f"파일 '{filename}': {len(functions)}개 함수 분석 큐에 추가")
     
     def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
-        """diff 패치에서 상세 변경 정보 추출"""
+        """diff 패치에서 상세 변경 정보 추출(라인)"""
         changes = {}
         current_line = 0
         
@@ -127,6 +125,7 @@ class CodeAnalysisService:
         """파일에서 함수/메서드를 개별적으로 추출"""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''
         
+        #python일 경우, ast사용
         if ext == 'py':
             return await self._extract_python_functions(file_content, filename, diff_info)
         else:
