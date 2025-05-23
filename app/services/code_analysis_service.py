@@ -721,12 +721,12 @@ class CodeAnalysisService:
         
         return ""
     
-    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str):
+    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str, commit_sha: str):
         """파일별 종합 분석 및 Notion 업데이트"""
         filename = func_info['filename']
         
         # 1. 파일의 모든 함수 분석이 완료되었는지 확인
-        if await self._is_file_analysis_complete(filename, user_id):
+        if await self._is_file_analysis_complete(filename, user_id, commit_sha):
             # 2. 파일별 종합 분석 수행
             file_summary = await self._generate_file_level_analysis(filename, user_id)
             
