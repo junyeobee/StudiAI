@@ -804,7 +804,7 @@ class CodeAnalysisService:
         )
         model_name = "meta-llama-3-8b-instruct"
         # TODO: 실제 LLM API 호출
-        response = await client.chat.completions.create(
+        response = client.chat.completions.create(
             model=model_name,
             messages=[
                 {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
