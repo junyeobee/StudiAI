@@ -14,6 +14,7 @@ class CodeAnalysisService:
         self.redis_client = redis_client
         self.supabase = supabase
         self.function_queue = asyncio.Queue()
+        
     
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
         """코드 변경 분석 진입점 - 변경된 함수만 처리"""
@@ -217,7 +218,7 @@ class CodeAnalysisService:
     async def _extract_functions_from_file(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
         """파일에서 함수/메서드를 개별적으로 추출"""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''
-        
+        print(filename)
         #python일 경우, ast사용
         if ext == 'py':
             return await self._extract_python_functions(file_content, filename, diff_info)
