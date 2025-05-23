@@ -410,6 +410,7 @@ class CodeAnalysisService:
         
         # Redis에서 이전 분석 결과 조회
         redis_key = f"func:{commit_sha}:{filename}:{func_name}"
+        
         previous_summary = self.redis_client.get(redis_key)
         
         # 참조 파일 내용 가져오기
