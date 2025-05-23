@@ -49,6 +49,8 @@ github_logger.setLevel(logging.INFO)
 github_handler = logging.FileHandler(log_file, encoding='utf-8')
 github_handler.setFormatter(logging.Formatter(log_format, date_format))
 github_logger.addHandler(github_handler)
+github_logger.propagate = False
+
 def setup_logging():
     """로깅 설정을 초기화합니다."""
     # 콘솔 핸들러 추가
