@@ -328,7 +328,7 @@ class CodeAnalysisService:
                     'changes': global_changes,
                     'has_changes': bool(global_changes)
                 })
-            
+            print(functions)
             return functions
             
         except SyntaxError as e:
