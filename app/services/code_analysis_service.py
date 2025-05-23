@@ -334,19 +334,27 @@ class CodeAnalysisService:
     async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, owner: str, repo: str):
         """함수별 분석 작업을 큐에 추가"""
         # 메타데이터에서 참조 정보 추출
-        metadata = self._extract_function_metadata(func_info['code'])
+        # Redis 키 생성 (commit_sha 포함)
+        redis_key = f"func:{commit_sha}:{func_info['filename']}:{func_info['name']}"
+        cached_result = self.redis_client.get(redis_key)
+
+        if cached_result and not func_info.get('has_changes', True):
+            api_logger.info(f"함수 '{func_info['name']}' 변경 없음, 캐시 사용")
+            return
         
-        analysis_item = {
-            'function_info': func_info,
-            'commit_sha': commit_sha,
-            'user_id': user_id,
-            'owner': owner,
-            'repo': repo,
-            'metadata': metadata
-        }
+        # 변경된 함수만 큐에 추가
+        if func_info.get('has_changes', True):
+            analysis_item = {
+                'function_info': func_info,
+                'commit_sha': commit_sha,
+                'user_id': user_id,
+                'owner': owner,
+                'repo': repo,
+                'metadata': self._extract_function_metadata(func_info['code'])
+            }
         
         await self.function_queue.put(analysis_item)
-        api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨")
+        api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (변경 감지)")
     
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
         """함수 코드에서 메타데이터 추출"""
@@ -392,12 +400,13 @@ class CodeAnalysisService:
         func_info = item['function_info']
         func_name = func_info['name']
         filename = func_info['filename']
+        commit_sha = item['commit_sha']
         user_id = item['user_id']
         
         api_logger.info(f"함수 '{func_name}' 분석 시작")
         
         # Redis에서 이전 분석 결과 조회
-        redis_key = f"func:{filename}:{func_name}"
+        redis_key = f"func:{commit_sha}:{filename}:{func_name}"
         previous_summary = self.redis_client.get(redis_key)
         
         # 참조 파일 내용 가져오기
@@ -797,9 +806,16 @@ class CodeAnalysisService:
         # return response.choices[0].message.content
         
         # 임시 응답
+        try:
+            if '파일명: ' in prompt:
+                filename = prompt.split('파일명: ')[1].split()[0]
+            else:
+                filename = "unknown_file"  # 기본값 설정
+        except (IndexError, AttributeError):
+            filename = "unknown_file"
+    
         return f"""
-    # 📊 {prompt.split('파일명: ')[1].split()[0]} 전체 분석 보고서
-
+# 📊 {filename} 전체 분석 보고서
     ## 🏛️ 아키텍처 분석
     - **설계 패턴**: 서비스 레이어 패턴 적용
     - **구조**: 잘 모듈화된 클래스 중심 설계
