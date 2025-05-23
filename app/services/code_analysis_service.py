@@ -40,7 +40,7 @@ class CodeAnalysisService:
             for func_info in functions:
                 await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
             
-            api_logger.info(f"파일 '{filename}': {len(functions)}개 함수 분석 큐에 추가")
+            api_logger.info(f"파일 '{filename}': {len(functions)}개 함수중 {len([f for f in functions if f.get('has_changes', True)])}개 변경된 함수 분석 큐에 추가")
     
     def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
         """diff 패치에서 상세 변경 정보 추출(라인)"""
@@ -399,9 +399,6 @@ class CodeAnalysisService:
     
     async def _analyze_function(self, item: Dict):
         """개별 함수 분석 처리"""
-        if not item['function_info'].get('has_changes'):
-            api_logger.info(f"함수 '{item['function_info']['name']}' 변경 없음, 분석 실행X")
-            return
         func_info = item['function_info']
         func_name = func_info['name']
         filename = func_info['filename']
