@@ -355,7 +355,7 @@ class CodeAnalysisService:
             }
             
             await self.function_queue.put(analysis_item)
-            
+
             api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (변경 감지)")
     
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
@@ -399,6 +399,9 @@ class CodeAnalysisService:
     
     async def _analyze_function(self, item: Dict):
         """개별 함수 분석 처리"""
+        if not item['function_info'].get('has_changes'):
+            api_logger.info(f"함수 '{item['function_info']['name']}' 변경 없음, 분석 실행X")
+            return
         func_info = item['function_info']
         func_name = func_info['name']
         filename = func_info['filename']
