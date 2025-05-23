@@ -866,7 +866,7 @@ class CodeAnalysisService:
         
         # 개선 제안만 추출하는 LLM 호출
         suggestions_prompt = f"""
-    파일명 : {filename}
+    파일명: {filename}
     다음 파일 분석 결과에서 **구체적이고 실행 가능한 개선 제안**만 추출해주세요:
 
     {file_summary}
