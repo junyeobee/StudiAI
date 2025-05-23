@@ -7,6 +7,7 @@ import re
 import json
 import time
 import ast
+from openai import OpenAI
 
 class CodeAnalysisService:
     """함수 중심 코드 분석 및 LLM 처리 서비스"""
@@ -796,8 +797,21 @@ class CodeAnalysisService:
 
     async def _call_llm_for_file_analysis(self, prompt: str) -> str:
         """파일 전체 분석을 위한 LLM 호출"""
-        
+        #현재 내 로컬 API 엔드포인트
+        client = OpenAI(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+        )
+        model_name = "meta-llama-3-8b-instruct"
         # TODO: 실제 LLM API 호출
+        response = await client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
+                {"role": "user", "content": prompt}
+            ],
+        )
+        return response.choices[0].message.content
         # response = await openai.ChatCompletion.acreate(
         #     model="gpt-4-turbo",  # 긴 컨텍스트를 위해 turbo 모델 사용
         #     messages=[
