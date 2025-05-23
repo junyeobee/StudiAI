@@ -556,14 +556,22 @@ class CodeAnalysisService:
         
         full_prompt = "\n".join(prompt_parts)
         
-        # TODO: 실제 LLM API 호출 구현
-        # OpenAI API 호출 예시:
-        # response = await openai.ChatCompletion.acreate(
-        #     model="gpt-4",
-        #     messages=[{"role": "user", "content": full_prompt}],
-        #     temperature=0.3
-        # )
-        # return response.choices[0].message.content
+        #현재 내 로컬 API 엔드포인트
+        client = OpenAI(
+            base_url="http://localhost:1234/v1",
+            api_key="lm-studio",
+        )
+        model_name = "meta-llama-3-8b-instruct"
+        # TODO: 실제 LLM API 호출
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[
+                {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
+                {"role": "user", "content": full_prompt}
+            ],
+        )
+        return response.choices[0].message.content
+        
         print(full_prompt)
         # 임시 응답
         return f"[LLM 분석 결과] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
@@ -812,68 +820,6 @@ class CodeAnalysisService:
             ],
         )
         return response.choices[0].message.content
-        # response = await openai.ChatCompletion.acreate(
-        #     model="gpt-4-turbo",  # 긴 컨텍스트를 위해 turbo 모델 사용
-        #     messages=[
-        #         {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
-        #         {"role": "user", "content": prompt}
-        #     ],
-        #     temperature=0.3,
-        #     max_tokens=2000
-        # )
-        # return response.choices[0].message.content
-        
-        # 임시 응답
-        try:
-            if '파일명: ' in prompt:
-                filename = prompt.split('파일명: ')[1].split()[0]
-            else:
-                filename = "unknown_file"  # 기본값 설정
-        except (IndexError, AttributeError):
-            filename = "unknown_file"
-    
-        return f"""
-# 📊 {filename} 전체 분석 보고서
-    ## 🏛️ 아키텍처 분석
-    - **설계 패턴**: 서비스 레이어 패턴 적용
-    - **구조**: 잘 모듈화된 클래스 중심 설계
-    - **책임 분리**: 각 함수가 단일 책임 원칙을 잘 준수
-
-    ## 🔄 데이터 흐름 분석
-    - **주요 흐름**: 파일 → 함수 추출 → 개별 분석 → 큐 처리
-    - **병목 구간**: LLM API 호출 부분에서 지연 가능성
-    - **개선 포인트**: 병렬 처리 도입 가능
-
-    ## 🚀 성능 및 확장성
-    - **성능**: Redis 캐싱으로 효율적 처리
-    - **확장성**: 큐 기반 설계로 확장 용이
-    - **최적화**: 함수 분할 로직 개선 여지
-
-    ## 🛡️ 안정성 및 에러 처리
-    - **예외 처리**: try-catch 블록 충분히 활용
-    - **로깅**: 각 단계별 로깅 잘 구현
-    - **개선**: 타임아웃 처리 추가 필요
-
-    ## 📈 코드 품질 평가
-    ⭐⭐⭐⭐⭐ (5/5)
-    - **가독성**: 매우 우수
-    - **유지보수성**: 모듈화 잘 됨
-    - **테스트 가능성**: 각 함수가 독립적
-
-    ## 🎯 구체적 개선 제안
-
-    ### 🔥 상순위 (즉시 적용)
-    1. **LLM API 실제 연동** - 2시간 소요
-    2. **병렬 처리 도입** - 4시간 소요
-
-    ### 🚀 중순위 (1주 내)
-    1. **에러 재시도 로직 강화** - 6시간 소요
-    2. **모니터링 대시보드 추가** - 1일 소요
-
-    ### 💡 하순위 (장기)
-    1. **ML 기반 코드 품질 예측** - 1주 소요
-    2. **실시간 협업 기능** - 2주 소요
-    """
     
 
     async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str):
