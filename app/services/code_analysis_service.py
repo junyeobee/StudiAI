@@ -83,28 +83,6 @@ class CodeAnalysisService:
         # 최종 통계 로그
         api_logger.info(f"커밋 {commit_sha[:8]} 분석 준비 완료: 총 {total_functions}개 함수 중 {new_functions}개 새로 분석, {cached_functions}개 캐시 활용")
     
-    async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, 
-                                       owner: str, repo: str, priority: bool = False):
-        """함수별 분석 작업을 큐에 추가 - 우선순위 지원"""
-        # 메타데이터에서 참조 정보 추출
-        metadata = self._extract_function_metadata(func_info['code'])
-        
-        analysis_item = {
-            'function_info': func_info,
-            'commit_sha': commit_sha,
-            'user_id': user_id,
-            'owner': owner,
-            'repo': repo,
-            'metadata': metadata,
-            'priority': priority,
-            'cache_key': f"{user_id}:{commit_sha}:{func_info['filename']}:{func_info['name']}"
-        }
-        
-        await self.function_queue.put(analysis_item)
-        
-        priority_text = "우선순위" if priority else "일반"
-        api_logger.debug(f"함수 '{func_info['name']}' {priority_text} 분석 큐에 추가됨")
-    
     async def process_queue(self):
         """함수별 분석 큐 처리 - 우선순위 기반 처리"""
         api_logger.info("함수별 분석 큐 처리 시작")
