@@ -7,6 +7,7 @@ import re
 import json
 import time
 import ast
+from app.services.github_webhook_service import GitHubWebhookService
 
 class CodeAnalysisService:
     """함수 중심 코드 분석 및 LLM 처리 서비스"""
@@ -17,6 +18,33 @@ class CodeAnalysisService:
         
     
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
+        """코드 변경 분석 진입점 - 함수 중심으로 재설계"""
+        api_logger.info(f"함수별 분석 시작: {len(files)}개 파일")
+        
+        for file in files:
+            filename = file.get('filename', 'unknown')
+            
+            if "patch" not in file and "full_content" not in file:
+                api_logger.info(f"파일 '{filename}': 분석할 내용 없음, 건너뜀")
+                continue
+            
+            # 전체 파일 내용과 변경 정보 추출
+            if "full_content" in file:
+                file_content = file["full_content"]
+                diff_info = self._extract_detailed_diff(file.get("patch", "")) if "patch" in file else {}
+            else:
+                file_content, diff_info = self._parse_patch_with_context(file["patch"])
+            
+            # 파일을 함수 단위로 분해
+            functions = await self._extract_functions_from_file(file_content, filename, diff_info)
+            
+            # 각 함수를 분석 큐에 추가
+            for func_info in functions:
+                await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
+            
+            api_logger.info(f"파일 '{filename}': {len(functions)}개 함수 분석 큐에 추가")
+
+    async def danalyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
         """코드 변경 분석 진입점 - 변경된 함수만 처리"""
         api_logger.info(f"커밋 {commit_sha[:8]} 함수별 분석 시작: {len(files)}개 파일")
         
@@ -41,7 +69,7 @@ class CodeAnalysisService:
                 continue
             
             # 패치에서 현재 코드 상태 재구성 (전체 파일 내용 대신)
-            file_content, _ = self._parse_patch_with_context(file["patch"])
+            file_content = await GitHubWebhookService.fetch_file_content(owner, repo, filename, commit_sha)
             print(file_content)
             # 파일을 함수 단위로 분해하고 변경 여부 판단
             functions = await self._extract_functions_from_file(file_content, filename, diff_info)
