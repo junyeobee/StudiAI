@@ -16,76 +16,93 @@ class CodeAnalysisService:
         self.function_queue = asyncio.Queue()  # 함수별 분석 큐
     
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
-        """코드 변경 분석 진입점 - 커밋 해시 기반 캐싱으로 효율성 개선"""
+        """코드 변경 분석 진입점 - 변경된 함수만 처리"""
         api_logger.info(f"커밋 {commit_sha[:8]} 함수별 분석 시작: {len(files)}개 파일")
         
         # 통계 정보
-        total_functions = 0
-        cached_functions = 0
+        total_functions_analyzed = 0
+        changed_functions = 0
         new_functions = 0
+        cached_functions = 0
         
         for file in files:
             filename = file.get('filename', 'unknown')
             
-            if "patch" not in file and "full_content" not in file:
-                api_logger.info(f"파일 '{filename}': 분석할 내용 없음, 건너뜀")
+            if "patch" not in file:
+                api_logger.info(f"파일 '{filename}': 패치 정보 없음, 건너뜀")
                 continue
             
-            # 파일 레벨 캐시 확인 (선택적 최적화)
-            file_cache_key = f"{user_id}:file_analysis:{commit_sha}:{filename}"
-            if self.redis_client.exists(file_cache_key):
-                api_logger.info(f"파일 '{filename}': 커밋 {commit_sha[:8]}에서 이미 분석 완료, 건너뜀")
+            # diff에서 변경된 라인 정보 추출
+            diff_info = self._extract_detailed_diff(file.get("patch", ""))
+            
+            if not diff_info:
+                api_logger.info(f"파일 '{filename}': 변경 사항 없음, 건너뜀")
                 continue
             
-            # 전체 파일 내용과 변경 정보 추출
-            if "full_content" in file:
-                file_content = file["full_content"]
-                diff_info = self._extract_detailed_diff(file.get("patch", "")) if "patch" in file else {}
-            else:
-                file_content, diff_info = self._parse_patch_with_context(file["patch"])
+            # 패치에서 현재 코드 상태 재구성 (전체 파일 내용 대신)
+            file_content, _ = self._parse_patch_with_context(file["patch"])
             
-            # 파일을 함수 단위로 분해
+            # 파일을 함수 단위로 분해하고 변경 여부 판단
             functions = await self._extract_functions_from_file(file_content, filename, diff_info)
-            total_functions += len(functions)
             
-            # 각 함수별 캐시 확인 및 큐 추가
-            file_new_functions = 0
-            file_cached_functions = 0
-            
+            # 변경된 함수만 필터링
+            changed_or_new_functions = []
             for func_info in functions:
-                # 함수별 캐시 키 생성 (새로운 구조)
                 function_cache_key = f"{user_id}:{commit_sha}:{filename}:{func_info['name']}"
                 
+                # 이미 분석된 함수는 스킵
                 if self.redis_client.exists(function_cache_key):
-                    api_logger.debug(f"함수 '{func_info['name']}': 커밋 {commit_sha[:8]}에서 이미 분석 완료, 스킵")
-                    file_cached_functions += 1
                     cached_functions += 1
-                else:
-                    # 변경 사항이 있는 함수만 우선 처리하도록 최적화
-                    if func_info.get('has_changes', False):
-                        api_logger.info(f"함수 '{func_info['name']}': 변경 사항 감지, 우선 분석 큐에 추가")
-                        await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo, priority=True)
+                    api_logger.debug(f"함수 '{func_info['name']}': 이미 분석 완료, 스킵")
+                    continue
+                
+                # 변경이 있는 함수만 처리
+                if func_info.get('has_changes', False):
+                    changed_or_new_functions.append(func_info)
+                    if self._is_new_function(user_id, filename, func_info['name']):
+                        new_functions += 1
+                        api_logger.info(f"함수 '{func_info['name']}': 새로운 함수 감지")
                     else:
-                        api_logger.debug(f"함수 '{func_info['name']}': 변경 없음, 일반 분석 큐에 추가")
-                        await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo, priority=False)
-                    
-                    file_new_functions += 1
-                    new_functions += 1
+                        changed_functions += 1
+                        api_logger.info(f"함수 '{func_info['name']}': 변경 사항 감지")
+                else:
+                    api_logger.debug(f"함수 '{func_info['name']}': 변경 없음, 큐에 추가하지 않음")
             
-            # 파일 처리 완료 표시
-            if file_new_functions > 0:
-                api_logger.info(f"파일 '{filename}': {file_new_functions}개 함수 분석 큐 추가, {file_cached_functions}개 캐시 활용")
+            # 변경된 함수들만 큐에 추가
+            for func_info in changed_or_new_functions:
+                await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
+                total_functions_analyzed += 1
+            
+            if changed_or_new_functions:
+                api_logger.info(f"파일 '{filename}': {len(changed_or_new_functions)}개 변경된 함수만 분석 큐에 추가")
             else:
-                # 모든 함수가 캐시에서 처리된 경우 파일 레벨 캐시 설정
-                self.redis_client.setex(file_cache_key, 86400 * 7, "completed")  # 7일 보관
-                api_logger.info(f"파일 '{filename}': 모든 함수 캐시 활용, 파일 레벨 캐시 설정")
+                api_logger.info(f"파일 '{filename}': 변경된 함수 없음, 분석 스킵")
         
         # 최종 통계 로그
-        api_logger.info(f"커밋 {commit_sha[:8]} 분석 준비 완료: 총 {total_functions}개 함수 중 {new_functions}개 새로 분석, {cached_functions}개 캐시 활용")
+        api_logger.info(f"커밋 {commit_sha[:8]} 분석 준비 완료: 변경된 함수 {changed_functions}개, 새 함수 {new_functions}개, 캐시된 함수 {cached_functions}개")
     
+
+    def _is_new_function(self, user_id: str, filename: str, func_name: str) -> bool:
+        """함수가 새로 추가된 것인지 확인 (이전 커밋에 존재하지 않았던 함수)"""
+        # 해당 함수의 이전 커밋 분석 결과가 있는지 확인
+        pattern = f"{user_id}:*:{filename}:{func_name}"
+        
+        cursor = 0
+        while True:
+            cursor, keys = self.redis_client.scan(cursor, match=pattern, count=100)
+            if keys:
+                return False  # 이전 분석 결과가 있으면 새로운 함수가 아님
+            if cursor == 0:
+                break
+        
+        return True  # 이전 분석 결과가 없으면 새로운 함수
+        
     async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, 
                                        owner: str, repo: str, priority: bool = False):
         """함수별 분석 작업을 큐에 추가 - 우선순위 지원"""
+        # 메타데이터에서 참조 정보 추출
+
+        """함수별 분석 작업을 큐에 추가"""
         # 메타데이터에서 참조 정보 추출
         metadata = self._extract_function_metadata(func_info['code'])
         
@@ -96,44 +113,25 @@ class CodeAnalysisService:
             'owner': owner,
             'repo': repo,
             'metadata': metadata,
-            'priority': priority,
             'cache_key': f"{user_id}:{commit_sha}:{func_info['filename']}:{func_info['name']}"
         }
         
         await self.function_queue.put(analysis_item)
+        api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨")
         
-        priority_text = "우선순위" if priority else "일반"
-        api_logger.debug(f"함수 '{func_info['name']}' {priority_text} 분석 큐에 추가됨")
     
     async def process_queue(self):
-        """함수별 분석 큐 처리 - 우선순위 기반 처리"""
+        """함수별 분석 큐 처리"""
         api_logger.info("함수별 분석 큐 처리 시작")
         
-        # 우선순위 함수들을 먼저 처리
-        priority_items = []
-        normal_items = []
-        
-        # 큐에서 모든 아이템을 가져와서 우선순위별로 분류
         while not self.function_queue.empty():
             try:
                 item = await self.function_queue.get()
-                if item.get('priority', False):
-                    priority_items.append(item)
-                else:
-                    normal_items.append(item)
+                await self._analyze_function(item)
+                self.function_queue.task_done()
             except Exception as e:
-                api_logger.error(f"큐 아이템 처리 오류: {e}")
+                api_logger.error(f"함수 분석 처리 오류: {e}")
                 continue
-
-        # 우선순위 아이템들 먼저 처리
-        api_logger.info(f"우선순위 함수 {len(priority_items)}개 먼저 처리")
-        for item in priority_items:
-            await self._analyze_function(item)
-        
-        # 일반 아이템들 처리
-        api_logger.info(f"일반 함수 {len(normal_items)}개 처리")
-        for item in normal_items:
-            await self._analyze_function(item)
         
         api_logger.info("모든 함수 분석 완료")
     
@@ -196,7 +194,7 @@ class CodeAnalysisService:
         return changes
     
     def _parse_patch_with_context(self, patch: str) -> Tuple[str, Dict[int, Dict]]:
-        """패치에서 코드와 변경 정보 동시 추출"""
+        """패치에서 코드와 변경 정보 동시 추출 - 기존과 동일"""
         diff_info = self._extract_detailed_diff(patch)
         
         # 패치에서 최종 코드 상태 재구성
@@ -427,7 +425,7 @@ class CodeAnalysisService:
         return content[:start_pos].count('\n') + 10  # 기본값
     
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
-        """함수 코드에서 메타데이터 추출"""
+        """함수 코드에서 메타데이터 추출 - 기존과 동일"""
         metadata = {}
         
         for i, line in enumerate(code.splitlines()[:10]):  # 첫 10줄만 검사
@@ -523,12 +521,15 @@ class CodeAnalysisService:
         # 새로운 Redis 키 구조로 저장
         self.redis_client.setex(cache_key, 86400 * 7, summary)  # 7일 보관
         
+        # 이전 호환성을 위한 레거시 키도 설정 (선택적)
+        legacy_key = f"func:{filename}:{func_name}"
+        self.redis_client.setex(legacy_key, 86400 * 7, summary)
         
         # Notion 업데이트는 파일 단위로 별도 처리
-        await self._update_notion_if_needed(func_info, summary, user_id)
+        await self._update_notion_if_needed(func_info, summary, user_id, commit_sha)
         
         api_logger.info(f"함수 '{func_name}' 분석 완료 (커밋: {commit_sha[:8]})")
-    
+
     async def _get_previous_function_analysis(self, user_id: str, filename: str, 
                                             func_name: str, current_commit: str) -> Optional[str]:
         """이전 커밋에서의 함수 분석 결과 조회"""
@@ -674,7 +675,6 @@ class CodeAnalysisService:
         # TODO: 실제 LLM API 호출 구현
         # 임시 응답 - 커밋 정보 포함
         return f"[LLM 분석 결과 - 커밋 {commit_sha[:8] if commit_sha else 'unknown'}] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
-
     
     async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str) -> str:
         """참조 파일의 함수 요약을 Redis에서 조회"""
