@@ -231,7 +231,7 @@ class CodeAnalysisService:
         try:
             tree = ast.parse(file_content)
             lines = file_content.splitlines()
-            
+            print(lines)
             # 전역 임포트 및 상수 수집
             global_code = []
             function_lines = set()
