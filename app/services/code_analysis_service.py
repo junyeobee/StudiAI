@@ -425,7 +425,7 @@ class CodeAnalysisService:
         return content[:start_pos].count('\n') + 10  # 기본값
     
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
-        """함수 코드에서 메타데이터 추출 - 기존과 동일"""
+        """함수 코드에서 메타데이터 추출"""
         metadata = {}
         
         for i, line in enumerate(code.splitlines()[:10]):  # 첫 10줄만 검사
@@ -578,7 +578,7 @@ class CodeAnalysisService:
     
     async def _process_multi_chunk_function(self, func_info: Dict, chunks: List[str], 
                                           metadata: Dict, previous_summary: str, 
-                                          reference_content: str) -> str:
+                                          reference_content: str, commit_sha: str) -> str:
         """다중 청크 함수의 연속적 요약 처리"""
         current_summary = previous_summary
         
@@ -592,6 +592,7 @@ class CodeAnalysisService:
                 metadata, 
                 current_summary,  # 이전 요약 포함
                 reference_content,
+                commit_sha,
                 chunk_index=i,
                 total_chunks=len(chunks)
             )
