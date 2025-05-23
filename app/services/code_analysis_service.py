@@ -218,7 +218,7 @@ class CodeAnalysisService:
     async def _extract_functions_from_file(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
         """파일에서 함수/메서드를 개별적으로 추출"""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''
-        print(filename)
+
         #python일 경우, ast사용
         if ext == 'py':
             return await self._extract_python_functions(file_content, filename, diff_info)
@@ -228,6 +228,9 @@ class CodeAnalysisService:
     async def _extract_python_functions(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
         """Python 파일에서 함수/메서드 개별 추출 (AST 사용)"""
         functions = []
+        api_logger.info(f"파싱 시도 파일: {filename}")
+        api_logger.info(f"파일 내용 시작 (repr): {repr(file_content[:100])}")
+        api_logger.info(f"파일 내용 전체 길이: {len(file_content)}")
         
         try:
             tree = ast.parse(file_content)
