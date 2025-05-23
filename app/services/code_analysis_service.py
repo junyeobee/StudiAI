@@ -332,12 +332,13 @@ class CodeAnalysisService:
         return content[:start_pos].count('\n') + 10  # 기본값
     
     async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, owner: str, repo: str):
-        """함수별 분석 작업을 큐에 추가"""
-        # 메타데이터에서 참조 정보 추출
+        """함수별 분석 작업을 큐에 추가 - 변경된 함수만"""
+        
         # Redis 키 생성 (commit_sha 포함)
         redis_key = f"func:{commit_sha}:{func_info['filename']}:{func_info['name']}"
+        
+        # 이미 분석된 결과가 있고 변경사항이 없으면 스킵
         cached_result = self.redis_client.get(redis_key)
-
         if cached_result and not func_info.get('has_changes', True):
             api_logger.info(f"함수 '{func_info['name']}' 변경 없음, 캐시 사용")
             return
@@ -352,9 +353,9 @@ class CodeAnalysisService:
                 'repo': repo,
                 'metadata': self._extract_function_metadata(func_info['code'])
             }
-        
-        await self.function_queue.put(analysis_item)
-        api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (변경 감지)")
+            
+            await self.function_queue.put(analysis_item)
+            api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (변경 감지)")
     
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
         """함수 코드에서 메타데이터 추출"""
