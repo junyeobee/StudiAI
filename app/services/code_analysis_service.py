@@ -7,15 +7,13 @@ import re
 import json
 import time
 import ast
-from app.services.github_webhook_service import GitHubWebhookService
 
 class CodeAnalysisService:
     """함수 중심 코드 분석 및 LLM 처리 서비스"""
     def __init__(self, redis_client: Redis, supabase: AsyncClient):
         self.redis_client = redis_client
         self.supabase = supabase
-        self.function_queue = asyncio.Queue()
-        
+        self.function_queue = asyncio.Queue()  # 함수별 분석 큐
     
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
         """코드 변경 분석 진입점 - 함수 중심으로 재설계"""
@@ -43,126 +41,6 @@ class CodeAnalysisService:
                 await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
             
             api_logger.info(f"파일 '{filename}': {len(functions)}개 함수 분석 큐에 추가")
-
-    async def danalyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
-        """코드 변경 분석 진입점 - 변경된 함수만 처리"""
-        api_logger.info(f"커밋 {commit_sha[:8]} 함수별 분석 시작: {len(files)}개 파일")
-        
-        # 통계 정보
-        total_functions_analyzed = 0
-        changed_functions = 0
-        new_functions = 0
-        cached_functions = 0
-        
-        for file in files:
-            filename = file.get('filename', 'unknown')
-            
-            if "patch" not in file:
-                api_logger.info(f"파일 '{filename}': 패치 정보 없음, 건너뜀")
-                continue
-            
-            # diff에서 변경된 라인 정보 추출
-            diff_info = self._extract_detailed_diff(file.get("patch", ""))
-            
-            if not diff_info:
-                api_logger.info(f"파일 '{filename}': 변경 사항 없음, 건너뜀")
-                continue
-            
-            # 패치에서 현재 코드 상태 재구성 (전체 파일 내용 대신)
-            file_content = await GitHubWebhookService.fetch_file_content(owner, repo, filename, commit_sha)
-            print(file_content)
-            # 파일을 함수 단위로 분해하고 변경 여부 판단
-            functions = await self._extract_functions_from_file(file_content, filename, diff_info)
-            
-            # 변경된 함수만 필터링
-            changed_or_new_functions = []
-            for func_info in functions:
-                function_cache_key = f"{user_id}:{commit_sha}:{filename}:{func_info['name']}"
-                
-                # 이미 분석된 함수는 스킵
-                if self.redis_client.exists(function_cache_key):
-                    cached_functions += 1
-                    api_logger.debug(f"함수 '{func_info['name']}': 이미 분석 완료, 스킵")
-                    continue
-                
-                # 변경이 있는 함수만 처리
-                if func_info.get('has_changes', False):
-                    changed_or_new_functions.append(func_info)
-                    if self._is_new_function(user_id, filename, func_info['name']):
-                        new_functions += 1
-                        api_logger.info(f"함수 '{func_info['name']}': 새로운 함수 감지")
-                    else:
-                        changed_functions += 1
-                        api_logger.info(f"함수 '{func_info['name']}': 변경 사항 감지")
-                else:
-                    api_logger.debug(f"함수 '{func_info['name']}': 변경 없음, 큐에 추가하지 않음")
-            
-            # 변경된 함수들만 큐에 추가
-            for func_info in changed_or_new_functions:
-                await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
-                total_functions_analyzed += 1
-            
-            if changed_or_new_functions:
-                api_logger.info(f"파일 '{filename}': {len(changed_or_new_functions)}개 변경된 함수만 분석 큐에 추가")
-            else:
-                api_logger.info(f"파일 '{filename}': 변경된 함수 없음, 분석 스킵")
-        
-        # 최종 통계 로그
-        api_logger.info(f"커밋 {commit_sha[:8]} 분석 준비 완료: 변경된 함수 {changed_functions}개, 새 함수 {new_functions}개, 캐시된 함수 {cached_functions}개")
-    
-
-    def _is_new_function(self, user_id: str, filename: str, func_name: str) -> bool:
-        """함수가 새로 추가된 것인지 확인 (이전 커밋에 존재하지 않았던 함수)"""
-        # 해당 함수의 이전 커밋 분석 결과가 있는지 확인
-        pattern = f"{user_id}:*:{filename}:{func_name}"
-        
-        cursor = 0
-        while True:
-            cursor, keys = self.redis_client.scan(cursor, match=pattern, count=100)
-            if keys:
-                return False  # 이전 분석 결과가 있으면 새로운 함수가 아님
-            if cursor == 0:
-                break
-        
-        return True  # 이전 분석 결과가 없으면 새로운 함수
-        
-    async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, 
-                                       owner: str, repo: str, priority: bool = False):
-        """함수별 분석 작업을 큐에 추가 - 우선순위 지원"""
-        # 메타데이터에서 참조 정보 추출
-
-        """함수별 분석 작업을 큐에 추가"""
-        # 메타데이터에서 참조 정보 추출
-        metadata = self._extract_function_metadata(func_info['code'])
-        
-        analysis_item = {
-            'function_info': func_info,
-            'commit_sha': commit_sha,
-            'user_id': user_id,
-            'owner': owner,
-            'repo': repo,
-            'metadata': metadata,
-            'cache_key': f"{user_id}:{commit_sha}:{func_info['filename']}:{func_info['name']}"
-        }
-        
-        await self.function_queue.put(analysis_item)
-        api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨")
-        
-    
-    async def process_queue(self):
-        """함수별 분석 큐 처리"""
-        api_logger.info("함수별 분석 큐 처리 시작")
-        
-        while not self.function_queue.empty():
-            try:
-                item = await self.function_queue.get()
-                await self._analyze_function(item)
-                self.function_queue.task_done()
-            except Exception as e:
-                api_logger.error(f"함수 분석 처리 오류: {e}")
-                continue
-        
-        api_logger.info("모든 함수 분석 완료")
     
     def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
         """diff 패치에서 상세 변경 정보 추출(라인)"""
@@ -223,7 +101,7 @@ class CodeAnalysisService:
         return changes
     
     def _parse_patch_with_context(self, patch: str) -> Tuple[str, Dict[int, Dict]]:
-        """패치에서 코드와 변경 정보 동시 추출 - 기존과 동일"""
+        """패치에서 코드와 변경 정보 동시 추출"""
         diff_info = self._extract_detailed_diff(patch)
         
         # 패치에서 최종 코드 상태 재구성
@@ -246,7 +124,7 @@ class CodeAnalysisService:
     async def _extract_functions_from_file(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
         """파일에서 함수/메서드를 개별적으로 추출"""
         ext = filename.split('.')[-1].lower() if '.' in filename else ''
-
+        
         #python일 경우, ast사용
         if ext == 'py':
             return await self._extract_python_functions(file_content, filename, diff_info)
@@ -256,14 +134,11 @@ class CodeAnalysisService:
     async def _extract_python_functions(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
         """Python 파일에서 함수/메서드 개별 추출 (AST 사용)"""
         functions = []
-        api_logger.info(f"파싱 시도 파일: {filename}")
-        api_logger.info(f"파일 내용 시작 (repr): {repr(file_content[:100])}")
-        api_logger.info(f"파일 내용 전체 길이: {len(file_content)}")
-
+        
         try:
             tree = ast.parse(file_content)
             lines = file_content.splitlines()
-            print(lines)
+            
             # 전역 임포트 및 상수 수집
             global_code = []
             function_lines = set()
@@ -360,7 +235,7 @@ class CodeAnalysisService:
                     'changes': global_changes,
                     'has_changes': bool(global_changes)
                 })
-            print(functions)
+            
             return functions
             
         except SyntaxError as e:
@@ -456,6 +331,23 @@ class CodeAnalysisService:
         
         return content[:start_pos].count('\n') + 10  # 기본값
     
+    async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, owner: str, repo: str):
+        """함수별 분석 작업을 큐에 추가"""
+        # 메타데이터에서 참조 정보 추출
+        metadata = self._extract_function_metadata(func_info['code'])
+        
+        analysis_item = {
+            'function_info': func_info,
+            'commit_sha': commit_sha,
+            'user_id': user_id,
+            'owner': owner,
+            'repo': repo,
+            'metadata': metadata
+        }
+        
+        await self.function_queue.put(analysis_item)
+        api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨")
+    
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
         """함수 코드에서 메타데이터 추출"""
         metadata = {}
@@ -496,25 +388,17 @@ class CodeAnalysisService:
         api_logger.info("모든 함수 분석 완료")
     
     async def _analyze_function(self, item: Dict):
-        """개별 함수 분석 처리 - 캐시 키 개선"""
+        """개별 함수 분석 처리"""
         func_info = item['function_info']
         func_name = func_info['name']
         filename = func_info['filename']
         user_id = item['user_id']
-        commit_sha = item['commit_sha']
-        cache_key = item['cache_key']
         
-        api_logger.info(f"함수 '{func_name}' 분석 시작 (커밋: {commit_sha[:8]})")
+        api_logger.info(f"함수 '{func_name}' 분석 시작")
         
-        # 분석 시작 전 다시 한번 캐시 확인 (동시성 처리)
-        if self.redis_client.exists(cache_key):
-            api_logger.info(f"함수 '{func_name}': 다른 프로세스에서 이미 분석 완료, 스킵")
-            return
-        
-        # 이전 커밋에서의 분석 결과 조회 (개선된 버전)
-        previous_summary = await self._get_previous_function_analysis(
-            user_id, filename, func_name, commit_sha
-        )
+        # Redis에서 이전 분석 결과 조회
+        redis_key = f"func:{filename}:{func_name}"
+        previous_summary = self.redis_client.get(redis_key)
         
         # 참조 파일 내용 가져오기
         reference_content = None
@@ -523,7 +407,7 @@ class CodeAnalysisService:
                 item['metadata']['reference_file'], 
                 item['owner'], 
                 item['repo'], 
-                commit_sha
+                item['commit_sha']
             )
         
         # 함수가 길면 청크로 분할
@@ -536,8 +420,7 @@ class CodeAnalysisService:
                 chunks[0], 
                 item['metadata'], 
                 previous_summary, 
-                reference_content,
-                commit_sha
+                reference_content
             )
         else:
             # 다중 청크 연속 처리
@@ -546,56 +429,17 @@ class CodeAnalysisService:
                 chunks, 
                 item['metadata'], 
                 previous_summary, 
-                reference_content,
-                commit_sha
+                reference_content
             )
         
-        # 새로운 Redis 키 구조로 저장
-        self.redis_client.setex(cache_key, 86400 * 7, summary)  # 7일 보관
-        
-        # 이전 호환성을 위한 레거시 키도 설정 (선택적)
-        legacy_key = f"func:{filename}:{func_name}"
-        self.redis_client.setex(legacy_key, 86400 * 7, summary)
+        # Redis에 최종 요약 저장
+        self.redis_client.setex(redis_key, 86400 * 7, summary)  # 7일 보관
         
         # Notion 업데이트는 파일 단위로 별도 처리
-        await self._update_notion_if_needed(func_info, summary, user_id, commit_sha)
+        await self._update_notion_if_needed(func_info, summary, user_id)
         
-        api_logger.info(f"함수 '{func_name}' 분석 완료 (커밋: {commit_sha[:8]})")
-
-    async def _get_previous_function_analysis(self, user_id: str, filename: str, 
-                                            func_name: str, current_commit: str) -> Optional[str]:
-        """이전 커밋에서의 함수 분석 결과 조회"""
-        
-        # 1. 동일 함수의 이전 커밋 분석 결과 검색
-        pattern = f"{user_id}:*:{filename}:{func_name}"
-        matching_keys = []
-        
-        # Redis SCAN을 사용하여 패턴 매칭 키 조회
-        cursor = 0
-        while True:
-            cursor, keys = self.redis_client.scan(cursor, match=pattern, count=100)
-            matching_keys.extend(keys)
-            if cursor == 0:
-                break
-        
-        # 현재 커밋 제외하고 가장 최근 분석 결과 반환
-        previous_keys = [key for key in matching_keys if current_commit not in key]
-        
-        if previous_keys:
-            # 키 이름을 기준으로 정렬 (최근 것부터)
-            previous_keys.sort(reverse=True)
-            latest_key = previous_keys[0]
-            
-            previous_analysis = self.redis_client.get(latest_key)
-            if previous_analysis:
-                # 이전 커밋 해시 추출
-                previous_commit = latest_key.split(':')[1]
-                api_logger.info(f"함수 '{func_name}': 이전 커밋 {previous_commit[:8]} 분석 결과 활용")
-                return previous_analysis
-        
-        api_logger.debug(f"함수 '{func_name}': 이전 분석 결과 없음, 새로 분석")
-        return None
-
+        api_logger.info(f"함수 '{func_name}' 분석 완료")
+    
     def _split_function_if_needed(self, code: str, max_length: int = 2000) -> List[str]:
         """함수가 너무 길면 청크로 분할"""
         if len(code) <= max_length:
@@ -610,7 +454,7 @@ class CodeAnalysisService:
     
     async def _process_multi_chunk_function(self, func_info: Dict, chunks: List[str], 
                                           metadata: Dict, previous_summary: str, 
-                                          reference_content: str, commit_sha: str) -> str:
+                                          reference_content: str) -> str:
         """다중 청크 함수의 연속적 요약 처리"""
         current_summary = previous_summary
         
@@ -624,7 +468,6 @@ class CodeAnalysisService:
                 metadata, 
                 current_summary,  # 이전 요약 포함
                 reference_content,
-                commit_sha,
                 chunk_index=i,
                 total_chunks=len(chunks)
             )
@@ -635,15 +478,11 @@ class CodeAnalysisService:
     
     async def _call_llm_for_function(self, func_info: Dict, code: str, metadata: Dict, 
                                    previous_summary: str = None, reference_content: str = None,
-                                   commit_sha: str = None, chunk_index: int = 0, total_chunks: int = 1) -> str:
-        """함수별 LLM 분석 호출 - 커밋 정보 포함"""
+                                   chunk_index: int = 0, total_chunks: int = 1) -> str:
+        """함수별 LLM 분석 호출"""
         
         # 프롬프트 구성
         prompt_parts = []
-        
-        # 커밋 정보 추가
-        if commit_sha:
-            prompt_parts.append(f"🔍 커밋 {commit_sha[:8]}에서 분석하는 함수입니다.")
         
         # 기본 시스템 프롬프트
         if total_chunks > 1:
@@ -653,7 +492,7 @@ class CodeAnalysisService:
         
         # 이전 요약이 있으면 포함
         if previous_summary:
-            prompt_parts.append(f"\n📋 이전 분석 결과:\n{previous_summary}")
+            prompt_parts.append(f"\n이전 분석 결과:\n{previous_summary}")
             if total_chunks > 1:
                 prompt_parts.append("\n위 분석을 바탕으로 다음 코드 청크를 분석하고 통합된 요약을 제공하세요.")
             else:
@@ -661,17 +500,17 @@ class CodeAnalysisService:
         
         # 참조 파일 내용 포함
         if reference_content:
-            prompt_parts.append(f"\n🔗 참조 함수 코드:\n{reference_content}")
+            prompt_parts.append(f"\n참조 함수 코드:\n{reference_content}")
         
         # 메타데이터 기반 커스텀 프롬프트
         if 'custom_prompt' in metadata:
-            prompt_parts.append(f"\n📝 추가 요구사항: {metadata['custom_prompt']}")
+            prompt_parts.append(f"\n추가 요구사항: {metadata['custom_prompt']}")
         
         if 'return_type' in metadata:
-            prompt_parts.append(f"\n↩️ 예상 반환 타입: {metadata['return_type']}")
+            prompt_parts.append(f"\n예상 반환 타입: {metadata['return_type']}")
         
         if 'requirements' in metadata:
-            prompt_parts.append(f"\n⚙️ 구현 요구사항: {metadata['requirements']}")
+            prompt_parts.append(f"\n구현 요구사항: {metadata['requirements']}")
         
         # 변경 사항이 있으면 강조
         if func_info.get('has_changes', False):
@@ -685,29 +524,35 @@ class CodeAnalysisService:
                     changes_text.append(f"라인 {line_num}: 삭제됨 - '{change['old']}'")
             
             if changes_text:
-                prompt_parts.append(f"\n🔥 이번 커밋 주요 변경사항:\n" + "\n".join(changes_text))
+                prompt_parts.append(f"\n🔥 주요 변경사항:\n" + "\n".join(changes_text))
                 prompt_parts.append("\n특히 위 변경사항의 목적과 영향을 중점적으로 분석해주세요.")
-        else:
-            prompt_parts.append(f"\n✅ 이번 커밋에서 이 함수는 변경되지 않았습니다.")
         
         # 분석할 코드
-        prompt_parts.append(f"\n📄 분석할 코드:\n```{func_info.get('filename', '').split('.')[-1]}\n{code}\n```")
+        prompt_parts.append(f"\n분석할 코드:\n```{func_info.get('filename', '').split('.')[-1]}\n{code}\n```")
         
         # 응답 형식 지정
         prompt_parts.append("""
-📊 분석 결과를 다음 형식으로 제공하세요:
-1. **🎯 기능 요약**: 함수의 핵심 목적을 한 문장으로
-2. **⚙️ 주요 로직**: 핵심 알고리즘이나 처리 흐름
-3. **🔄 변경 영향**: (변경사항이 있는 경우) 변경으로 인한 동작 변화
-4. **🔗 의존성**: 사용하는 외부 함수나 라이브러리
-5. **💡 개선 제안**: (필요시) 코드 품질 향상 방안
+분석 결과를 다음 형식으로 제공하세요:
+1. **기능 요약**: 함수의 핵심 목적을 한 문장으로
+2. **주요 로직**: 핵심 알고리즘이나 처리 흐름
+3. **변경 영향**: (변경사항이 있는 경우) 변경으로 인한 동작 변화
+4. **의존성**: 사용하는 외부 함수나 라이브러리
+5. **개선 제안**: (필요시) 코드 품질 향상 방안
 """)
         
         full_prompt = "\n".join(prompt_parts)
-        print(full_prompt)
+        
         # TODO: 실제 LLM API 호출 구현
-        # 임시 응답 - 커밋 정보 포함
-        return f"[LLM 분석 결과 - 커밋 {commit_sha[:8] if commit_sha else 'unknown'}] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
+        # OpenAI API 호출 예시:
+        # response = await openai.ChatCompletion.acreate(
+        #     model="gpt-4",
+        #     messages=[{"role": "user", "content": full_prompt}],
+        #     temperature=0.3
+        # )
+        # return response.choices[0].message.content
+        print(full_prompt)
+        # 임시 응답
+        return f"[LLM 분석 결과] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
     
     async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str) -> str:
         """참조 파일의 함수 요약을 Redis에서 조회"""
@@ -753,12 +598,12 @@ class CodeAnalysisService:
         
         return ""
     
-    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str, commit_sha: str):
+    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str):
         """파일별 종합 분석 및 Notion 업데이트"""
         filename = func_info['filename']
         
         # 1. 파일의 모든 함수 분석이 완료되었는지 확인
-        if await self._is_file_analysis_complete(filename, user_id, commit_sha):
+        if await self._is_file_analysis_complete(filename, user_id):
             # 2. 파일별 종합 분석 수행
             file_summary = await self._generate_file_level_analysis(filename, user_id)
             
@@ -768,19 +613,12 @@ class CodeAnalysisService:
             # 4. 아키텍처 개선 제안 생성
             await self._generate_architecture_suggestions(filename, file_summary, user_id)
 
-    async def _is_file_analysis_complete(self, filename: str, user_id: str, commit_sha: str) -> bool:
-        """특정 커밋에서 파일의 모든 함수 분석이 완료되었는지 확인"""
+    async def _is_file_analysis_complete(self, filename: str, user_id: str) -> bool:
+        """파일의 모든 함수 분석이 완료되었는지 확인"""
         
-        # 해당 커밋과 파일의 모든 함수 키 조회
-        pattern = f"{user_id}:{commit_sha}:{filename}:*"
-        function_keys = []
-        
-        cursor = 0
-        while True:
-            cursor, keys = self.redis_client.scan(cursor, match=pattern, count=100)
-            function_keys.extend(keys)
-            if cursor == 0:
-                break
+        # Redis에서 해당 파일의 모든 함수 키 조회
+        pattern = f"func:{filename}:*"
+        function_keys = self.redis_client.keys(pattern)
         
         # 분석 대기 중인 함수가 있는지 큐에서 확인
         temp_queue = []
@@ -791,75 +629,15 @@ class CodeAnalysisService:
             item = await self.function_queue.get()
             temp_queue.append(item)
             
-            if (item['function_info']['filename'] == filename and 
-                item['commit_sha'] == commit_sha and 
-                item['user_id'] == user_id):
+            if item['function_info']['filename'] == filename:
                 pending_functions.add(item['function_info']['name'])
         
         # 큐에 다시 넣기
         for item in temp_queue:
             await self.function_queue.put(item)
         
-        # 대기 중인 함수가 없고, 분석된 함수가 있으면 완료
-        return len(pending_functions) == 0 and len(function_keys) > 0
-    
-    def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
-        """diff 패치에서 상세 변경 정보 추출(라인) - 기존과 동일"""
-        changes = {}
-        current_line = 0
-        
-        lines = patch.splitlines()
-        i = 0
-        
-        while i < len(lines):
-            line = lines[i]
-            
-            # @@ -a,b +c,d @@ 형식 헤더 찾기
-            hunk_match = re.match(r'^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@', line)
-            if hunk_match:
-                current_line = int(hunk_match.group(1))
-                i += 1
-                continue
-            
-            # 삭제된 라인
-            if line.startswith('-') and not line.startswith('---'):
-                old_code = line[1:]
-                # 다음 라인이 추가 라인인지 확인 (수정)
-                if i + 1 < len(lines) and lines[i + 1].startswith('+'):
-                    new_code = lines[i + 1][1:]
-                    changes[current_line] = {
-                        "type": "modified",
-                        "old": old_code,
-                        "new": new_code
-                    }
-                    i += 2  # 두 라인 모두 처리
-                    current_line += 1
-                else:
-                    changes[current_line] = {
-                        "type": "deleted",
-                        "old": old_code,
-                        "new": ""
-                    }
-                    i += 1
-                continue
-            
-            # 추가된 라인
-            elif line.startswith('+') and not line.startswith('+++'):
-                changes[current_line] = {
-                    "type": "added",
-                    "old": "",
-                    "new": line[1:]
-                }
-                current_line += 1
-                i += 1
-                continue
-            
-            # 컨텍스트 라인 (변경 없음)
-            else:
-                current_line += 1
-                i += 1
-        
-        return changes
+        # 대기 중인 함수가 없으면 완료
+        return len(pending_functions) == 0
 
     async def _generate_file_level_analysis(self, filename: str, user_id: str) -> str:
         """파일 전체 흐름 분석 및 종합 요약 생성"""
@@ -1019,7 +797,6 @@ class CodeAnalysisService:
         # return response.choices[0].message.content
         
         # 임시 응답
-        print(prompt)
         return f"""
     # 📊 {prompt.split('파일명: ')[1].split()[0]} 전체 분석 보고서
 
@@ -1088,7 +865,6 @@ class CodeAnalysisService:
         
         # 개선 제안만 추출하는 LLM 호출
         suggestions_prompt = f"""
-    파일명: {filename}
     다음 파일 분석 결과에서 **구체적이고 실행 가능한 개선 제안**만 추출해주세요:
 
     {file_summary}
