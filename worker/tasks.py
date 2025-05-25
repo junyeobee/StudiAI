@@ -2,10 +2,16 @@ import redis
 import asyncio
 import os
 from typing import Dict, List, Any
-from rq import Queue
+from rq import Queue, SimpleWorker
+from rq.timeouts import TimerDeathPenalty
 from app.services.code_analysis_service import CodeAnalysisService
 from app.core.config import settings
 from app.utils.logger import api_logger
+
+# Windows 호환 워커 클래스 정의
+class WindowsSimpleWorker(SimpleWorker):
+    """Windows에서 SIGALRM 신호 문제를 해결하는 워커"""
+    death_penalty_class = TimerDeathPenalty
 
 # Redis 설정
 redis_host = settings.REDIS_HOST
@@ -72,11 +78,10 @@ def start_worker():
     try:
         api_logger.info("RQ 워커 시작...")
         
-        # Windows에서는 SpawnWorker 사용 (fork와 signal 문제 해결)
+        # Windows에서는 WindowsSimpleWorker 사용 (SIGALRM 문제 해결)
         if os.name == 'nt':  # Windows
-            from rq import SpawnWorker
-            worker = SpawnWorker([task_queue], connection=redis_conn)
-            api_logger.info("Windows용 SpawnWorker로 작업을 기다리고 있습니다...")
+            worker = WindowsSimpleWorker([task_queue], connection=redis_conn)
+            api_logger.info("Windows용 WindowsSimpleWorker로 작업을 기다리고 있습니다...")
         else:  # Unix/Linux
             from rq import Worker
             worker = Worker([task_queue], connection=redis_conn)
