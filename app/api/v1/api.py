@@ -2,7 +2,7 @@
 API 라우터 통합
 """
 from fastapi import APIRouter
-from app.api.v1.endpoints import databases, webhooks, learning, auth, notion_setting, github_webhook
+from app.api.v1.endpoints import databases, webhooks, learning, auth, notion_setting, github_webhook, worker
 
 api_router = APIRouter()
 public_router = APIRouter()
@@ -56,5 +56,11 @@ public_router.include_router(
     github_webhook.public_router,
     prefix="/github_webhook_public",
     tags=["github_webhook_public"]
+)
+
+api_router.include_router(
+    worker.router,
+    prefix="/worker",
+    tags=["worker"]
 )
 

@@ -2,7 +2,6 @@
 
 ## 개요
 FastAPI 서버와 분리된 RQ(Redis Queue) 워커를 통해 코드 분석 작업을 처리합니다.
-
 ## 실행 방법
 
 ### 1. Redis 서버 실행
@@ -13,7 +12,7 @@ redis-cli ping
 
 ### 2. RQ 패키지 설치
 ```bash
-pip install rq==1.15.1
+pip install rq
 ```
 
 ### 3. FastAPI 서버 실행 (터미널 1)
@@ -27,7 +26,7 @@ python main.py
 python start_worker.py
 
 # 방법 2: RQ 명령어로 직접 실행
-rq worker code_analysis --url redis://:{password}@localhost:9091/0
+rq worker code_analysis --url redis://:{password}@{server_url}:{port}/0
 ```
 
 ## 작업 흐름
@@ -42,10 +41,10 @@ rq worker code_analysis --url redis://:{password}@localhost:9091/0
 ### RQ 상태 확인
 ```bash
 # 큐 상태 확인
-rq info --url redis://:{password}@localhost:9091/0
+rq info --url redis://:{password}@{server_url}:{port}/0
 
 # 워커 상태 확인
-rq info --url redis://:{password}@localhost:9091/0 --interval 1
+rq info --url redis://:{password}@{server_url}:{port}/0 --interval 1
 ```
 
 ### Redis 큐 확인
@@ -57,10 +56,9 @@ redis-cli -h localhost -p 9091 -a {password} llen rq:queue:code_analysis
 redis-cli -h localhost -p 9091 -a {password} keys "rq:job:*"
 ```
 
-## 주요 변경사항 (Celery → RQ)
+## 주요 변경사항 (Fastapi 내부 비동기 큐 → RQ)
 
-- **더 간단한 설정**: 복잡한 Celery 설정 불필요
-- **안정성 향상**: Python 환경에서 더 안정적
+- **API 서버 부하 분산** : LLM분석, 대용량 파일 파싱 등 무거운 작업들을 워커 프로세스가 처리
 - **쉬운 모니터링**: RQ 대시보드 사용 가능
 - **빠른 시작**: 설정 오류 최소화
 
@@ -68,7 +66,7 @@ redis-cli -h localhost -p 9091 -a {password} keys "rq:job:*"
 
 - FastAPI 서버와 RQ 워커는 별도 프로세스로 실행
 - Redis 서버가 먼저 실행되어야 함
-- 환경변수(.env) 설정이 양쪽 모두에 필요
+- 환경변수(.env) 설정
 - 워커 재시작 시 처리 중인 작업은 재시도됨
 
 ## 트러블슈팅
@@ -87,5 +85,5 @@ python start_worker.py
 ### RQ 대시보드 사용 (선택사항)
 ```bash
 pip install rq-dashboard
-rq-dashboard --redis-url redis://:{password}@localhost:9091/0
+rq-dashboard --redis-url redis://:{password}@{server_url}:{port}/0
 ``` 

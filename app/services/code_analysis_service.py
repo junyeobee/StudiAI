@@ -14,7 +14,7 @@ class CodeAnalysisService:
     def __init__(self, redis_client: Redis, supabase: AsyncClient):
         self.redis_client = redis_client
         self.supabase = supabase
-        self.function_queue = asyncio.Queue()  # 함수별 분석 큐
+        self.function_queue = asyncio.Queue()
     
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
         """코드 변경 분석 처리"""
