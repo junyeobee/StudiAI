@@ -24,6 +24,9 @@ class CodeAnalysisService:
             filename = file.get('filename', 'unknown')
             status = file.get('status', '')
             
+            # 디버깅: 파일 데이터 구조 로깅 (필요시 주석 해제)
+            # api_logger.info(f"파일 '{filename}' (status: {status}) 데이터 키들: {list(file.keys())}")
+            
             if "patch" not in file and "full_content" not in file:
                 api_logger.info(f"파일 '{filename}': 분석할 내용 없음, 건너뜀")
                 continue

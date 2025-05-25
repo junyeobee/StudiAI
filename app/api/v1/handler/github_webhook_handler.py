@@ -136,8 +136,24 @@ class GitHubWebhookHandler:
                     except Exception as e:
                         api_logger.error(f"파일 '{filename}' 전체 내용 가져오기 실패: {str(e)}")
                 
-                elif status == "added" and "patch" in file:
-                    file["full_content"] = file["patch"]
+                elif status == "added":
+                    if "patch" in file:
+                        file["full_content"] = file["patch"]
+                        api_logger.info(f"새 파일 '{filename}' patch에서 내용 가져옴")
+                    else:
+                        # 새 파일인데 patch가 없는 비정상적인 경우 - GitHub API로 fallback
+                        api_logger.warning(f"새 파일 '{filename}'에 patch가 없음! GitHub API로 fallback 시도")
+                        try:
+                            file_content = await github_service.fetch_file_content(
+                                owner=owner,
+                                repo=repo,
+                                path=filename,
+                                ref=commit["sha"]
+                            )
+                            file["full_content"] = file_content
+                            api_logger.info(f"새 파일 '{filename}' 내용 GitHub API로 가져옴")
+                        except Exception as e:
+                            api_logger.error(f"새 파일 '{filename}' 내용 가져오기 실패: {str(e)}")
             
             # RQ 태스크로 분석 작업 등록
             job = task_queue.enqueue(
