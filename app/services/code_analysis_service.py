@@ -376,6 +376,7 @@ class CodeAnalysisService:
                     metadata['requirements'] = match.group(3)
                     metadata['custom_prompt'] = match.group(4).strip()
                     break
+
                 
                 
                 # 단순 참조 파일만 있는 경우: #[파일.py]
