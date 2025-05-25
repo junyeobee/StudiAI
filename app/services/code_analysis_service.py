@@ -22,26 +22,47 @@ class CodeAnalysisService:
         
         for file in files:
             filename = file.get('filename', 'unknown')
+            status = file.get('status', '')
             
             if "patch" not in file and "full_content" not in file:
                 api_logger.info(f"파일 '{filename}': 분석할 내용 없음, 건너뜀")
                 continue
             
-            # 전체 파일 내용과 변경 정보 추출
+            # 파일 내용 추출
             if "full_content" in file:
                 file_content = file["full_content"]
-                diff_info = self._extract_detailed_diff(file.get("patch", "")) if "patch" in file else {}
+                
+                # full_content가 patch 형태인지 확인하고 파싱
+                if (file_content.startswith('@@') or 
+                    any(line.startswith(('+', '-', '@@')) for line in file_content.split('\n')[:5])):
+                    file_content, _ = self._parse_patch_with_context(file_content)
             else:
-                file_content, diff_info = self._parse_patch_with_context(file["patch"])
+                file_content, _ = self._parse_patch_with_context(file["patch"])
+            
+            # diff 정보 추출 (새 파일은 diff 분석 불필요)
+            if status == "added":
+                diff_info = {}
+            elif "patch" in file or (file.get("full_content", "").startswith(('@@', '+', '-'))):
+                # patch가 있거나 full_content가 patch 형태면 diff 추출
+                patch_content = file.get("patch") or file.get("full_content", "")
+                diff_info = self._extract_detailed_diff(patch_content)
+            else:
+                diff_info = {}
             
             # 파일을 함수 단위로 분해
             functions = await self._extract_functions_from_file(file_content, filename, diff_info)
             
             # 각 함수를 분석 큐에 추가
             for func_info in functions:
+                # 새 파일 처리
+                if status == "added":
+                    func_info['has_changes'] = False  # 변경사항 아님
+                    func_info['changes'] = {}
+                    func_info['is_new_file'] = True   # 새 파일 플래그
+                
                 await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
             
-            api_logger.info(f"파일 '{filename}': {len(functions)}개 함수중 {len([f for f in functions if f.get('has_changes', True)])}개 변경된 함수 분석 큐에 추가")
+            api_logger.info(f"파일 '{filename}': {len(functions)}개 함수중 {len([f for f in functions if f.get('has_changes', True) or f.get('is_new_file', False)])}개 변경된 함수 분석 큐에 추가")
     
     def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
         """diff 패치에서 상세 변경 정보 추출(라인)"""
@@ -333,20 +354,24 @@ class CodeAnalysisService:
         return content[:start_pos].count('\n') + 10  # 기본값
     
     async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, owner: str, repo: str):
-        """함수별 분석 작업을 큐에 추가 - 변경된 함수만"""
-         # 이미 분석된 결과가 있고 변경사항이 없으면 스킵
-        if not func_info.get('has_changes', True): 
+        """함수별 분석 작업을 큐에 추가 - 변경된 함수 + 새 파일"""
+        
+        # 변경사항도 없고 새 파일도 아니면 스킵
+        if not func_info.get('has_changes', True) and not func_info.get('is_new_file', False): 
             api_logger.info(f"함수 '{func_info['name']}' 변경 없음")
             return
+        
         # Redis 키 생성 (commit_sha 포함)
         redis_key = f"{user_id}:func:{commit_sha}:{func_info['filename']}:{func_info['name']}"
         cached_result = self.redis_client.get(redis_key)
-        if cached_result and not func_info.get('has_changes', True):
+        
+        # 캐시가 있고 변경사항이 없는 기존 파일만 캐시 사용 (새 파일은 항상 분석)
+        if cached_result and not func_info.get('has_changes', True) and not func_info.get('is_new_file', False):
             api_logger.info(f"함수 '{func_info['name']}' 변경 없음, 캐시 사용")
             return
         
-        # 변경된 함수만 큐에 추가
-        if func_info.get('has_changes', True):
+        # 변경된 함수이거나 새 파일인 경우 큐에 추가
+        if func_info.get('has_changes', True) or func_info.get('is_new_file', False):
             analysis_item = {
                 'function_info': func_info,
                 'commit_sha': commit_sha,
@@ -357,8 +382,11 @@ class CodeAnalysisService:
             }
             
             await self.function_queue.put(analysis_item)
-
-            api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (변경 감지)")
+            
+            if func_info.get('is_new_file', False):
+                api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (새 파일)")
+            else:
+                api_logger.info(f"함수 '{func_info['name']}' 분석 큐에 추가됨 (변경 감지)")
     
     def _extract_function_metadata(self, code: str) -> Dict[str, Any]:
         """함수 코드에서 메타데이터 추출"""
