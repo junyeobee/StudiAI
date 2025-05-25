@@ -17,7 +17,7 @@ class CodeAnalysisService:
         self.function_queue = asyncio.Queue()  # 함수별 분석 큐
     
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
-        """코드 변경 분석 진입점 - 함수 중심으로 재설계"""
+        """코드 변경 분석 처리"""
         api_logger.info(f"함수별 분석 시작: {len(files)}개 파일")
         
         for file in files:
@@ -339,7 +339,7 @@ class CodeAnalysisService:
             api_logger.info(f"함수 '{func_info['name']}' 변경 없음")
             return
         # Redis 키 생성 (commit_sha 포함)
-        redis_key = f"func:{commit_sha}:{func_info['filename']}:{func_info['name']}"
+        redis_key = f"{user_id}:func:{commit_sha}:{func_info['filename']}:{func_info['name']}"
         cached_result = self.redis_client.get(redis_key)
         if cached_result and not func_info.get('has_changes', True):
             api_logger.info(f"함수 '{func_info['name']}' 변경 없음, 캐시 사용")
@@ -412,7 +412,7 @@ class CodeAnalysisService:
         api_logger.info(f"함수 '{func_name}' 분석 시작")
         
         # Redis에서 이전 분석 결과 조회
-        redis_key = f"func:{commit_sha}:{filename}:{func_name}"
+        redis_key = f"{user_id}:func:{commit_sha}:{filename}:{func_name}"
         
         previous_summary = self.redis_client.get(redis_key)
         
@@ -423,7 +423,8 @@ class CodeAnalysisService:
                 item['metadata']['reference_file'], 
                 item['owner'], 
                 item['repo'], 
-                item['commit_sha']
+                item['commit_sha'],
+                user_id
             )
         
         # 함수가 길면 청크로 분할
@@ -578,15 +579,15 @@ class CodeAnalysisService:
         # 임시 응답
         return f"[LLM 분석 결과] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
     
-    async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str) -> str:
+    async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str, user_id: str) -> str:
         """참조 파일의 함수 요약을 Redis에서 조회"""
         # 파일에서 특정 함수가 지정되었는지 확인
         if '#' in reference_file:
             file_path, func_name = reference_file.split('#', 1)
-            redis_key = f"func:{file_path}:{func_name}"
+            redis_key = f"{user_id}:func:{commit_sha}:{file_path}:{func_name}"
         else:
             # 파일 전체 참조인 경우 주요 함수들 조회
-            redis_key = f"func:{reference_file}:*"
+            redis_key = f"{user_id}:func:{commit_sha}:{reference_file}:*"
         
         cached_content = self.redis_client.get(redis_key)
         if cached_content:
@@ -867,7 +868,7 @@ class CodeAnalysisService:
         suggestions = await self._call_llm_for_file_analysis(suggestions_prompt)
         
         # Redis에 개선 제안 별도 저장
-        suggestions_key = f"suggestions:{filename}"
+        suggestions_key = f"{user_id}:suggestions:{filename}"
         self.redis_client.setex(suggestions_key, 86400 * 7, suggestions)  # 7일 보관
         
         api_logger.info(f"파일 '{filename}' 개선 제안 생성 완료")
