@@ -8,8 +8,6 @@ from app.api.v1.dependencies.github import get_github_webhook_service
 from app.utils.logger import api_logger
 from app.utils.github_webhook_helper import GithubWebhookHelper
 from app.api.v1.handler.github_webhook_handler import GitHubWebhookHandler
-from redis import Redis
-from app.core.redis_connect import get_redis
 
 router = APIRouter()
 public_router = APIRouter()
@@ -93,9 +91,8 @@ async def get_repo_list(
 async def handle_github_webhook(
     request: Request,
     background_tasks: BackgroundTasks,
-    supabase: AsyncClient = Depends(get_supabase),
-    redis_client: Redis = Depends(get_redis)
+    supabase: AsyncClient = Depends(get_supabase)
 ):
     """GitHub 웹훅 이벤트 처리 엔드포인트"""
-    handler = GitHubWebhookHandler(supabase, redis_client)
+    handler = GitHubWebhookHandler(supabase)
     return await handler.handle_webhook(request, background_tasks)
