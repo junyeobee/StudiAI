@@ -137,19 +137,7 @@ class GitHubWebhookHandler:
                         api_logger.error(f"파일 '{filename}' 전체 내용 가져오기 실패: {str(e)}")
                 
                 elif status == "added" and "patch" in file:
-                    # 새로 추가된 파일의 patch에서 + 접두사만 제거하면 됨
-                    patch_lines = file["patch"].splitlines()
-                    content_lines = []
-                    
-                    for line in patch_lines:
-                        if line.startswith('+'):
-                            content_lines.append(line[1:])  # + 제거
-                        elif not line.startswith(('@@', 'diff ', '---', '+++')):
-                            # diff 헤더가 아닌 컨텍스트 라인은 그대로
-                            content_lines.append(line)
-                    
-                    file["full_content"] = '\n'.join(content_lines)
-                    api_logger.info(f"새 파일 '{filename}' patch에서 내용 추출")
+                    file["full_content"] = file["patch"]
             
             # RQ 태스크로 분석 작업 등록
             job = task_queue.enqueue(
