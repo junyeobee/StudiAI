@@ -2,7 +2,7 @@ import redis
 import asyncio
 import os
 from typing import Dict, List, Any
-from rq import Worker, Queue
+from rq import Queue
 from app.services.code_analysis_service import CodeAnalysisService
 from app.core.config import settings
 from app.utils.logger import api_logger
@@ -27,7 +27,7 @@ def analyze_code_task(files: List[Dict], owner: str, repo: str, commit_sha: str,
         # 비동기 함수를 동기적으로 실행
         asyncio.run(_analyze_code_async(files, owner, repo, commit_sha, user_id))
         
-        api_logger.info(f"RQ 워커에서 코드 분석 완료: {commit_sha[:8]}")
+        api_logger.info(f"RQ 워커 코드 분석 완료: {commit_sha[:8]}")
         return {"status": "success", "commit_sha": commit_sha}
         
     except Exception as e:
@@ -68,16 +68,17 @@ async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_s
         raise
 
 def start_worker():
-    """RQ 워커 시작 - Windows 호환"""
+    """RQ 워커 시작 - Windows 완전 호환"""
     try:
         api_logger.info("RQ 워커 시작...")
         
-        # Windows
+        # Windows에서는 SpawnWorker 사용 (fork와 signal 문제 해결)
         if os.name == 'nt':  # Windows
-            from rq import SimpleWorker
-            worker = SimpleWorker([task_queue], connection=redis_conn)
-            api_logger.info("Windows용 SimpleWorker로 작업을 기다리고 있습니다...")
-        else: #Unix/Linux
+            from rq import SpawnWorker
+            worker = SpawnWorker([task_queue], connection=redis_conn)
+            api_logger.info("Windows용 SpawnWorker로 작업을 기다리고 있습니다...")
+        else:  # Unix/Linux
+            from rq import Worker
             worker = Worker([task_queue], connection=redis_conn)
             api_logger.info("RQ 워커가 작업을 기다리고 있습니다...")
         
