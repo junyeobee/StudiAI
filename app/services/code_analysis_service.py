@@ -156,7 +156,7 @@ class CodeAnalysisService:
     async def _extract_python_functions(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
         """Python 파일에서 함수/메서드 개별 추출 (AST 사용)"""
         functions = []
-        
+        api_logger.info(f"Python 파일 파싱 시작: {file_content}")
         try:
             tree = ast.parse(file_content)
             lines = file_content.splitlines()
