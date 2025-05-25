@@ -1,5 +1,6 @@
 import redis
 import asyncio
+import os
 from typing import Dict, List, Any
 from rq import Worker, Queue
 from app.services.code_analysis_service import CodeAnalysisService
@@ -67,13 +68,19 @@ async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_s
         raise
 
 def start_worker():
-    """RQ 워커 시작"""
+    """RQ 워커 시작 - Windows 호환"""
     try:
         api_logger.info("RQ 워커 시작...")
         
-        # Worker 생성 시 직접 connection 전달
-        worker = Worker([task_queue], connection=redis_conn)
-        api_logger.info("RQ 워커가 작업을 기다리고 있습니다...")
+        # Windows
+        if os.name == 'nt':  # Windows
+            from rq import SimpleWorker
+            worker = SimpleWorker([task_queue], connection=redis_conn)
+            api_logger.info("Windows용 SimpleWorker로 작업을 기다리고 있습니다...")
+        else: #Unix/Linux
+            worker = Worker([task_queue], connection=redis_conn)
+            api_logger.info("RQ 워커가 작업을 기다리고 있습니다...")
+        
         worker.work()
             
     except Exception as e:
