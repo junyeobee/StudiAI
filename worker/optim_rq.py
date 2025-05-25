@@ -259,15 +259,15 @@ def spawn_additional_workers(count: int):
     except Exception as e:
         api_logger.error(f"워커 생성 실패: {str(e)}")
 
-def terminate_idle_workers(count: int):
-    """유휴 워커 종료 (레거시 함수)"""
-    try:
-        redis_conn = redis.Redis(
-            host=os.getenv('REDIS_HOST', 'localhost'),
-            port=int(os.getenv('REDIS_PORT', 6379)),
-            password=os.getenv('REDIS_PASSWORD', None)
-        )
-        optimizer = RQOptimizer(redis_conn)
-        optimizer._terminate_idle_workers(count)
-    except Exception as e:
-        api_logger.error(f"워커 종료 실패: {str(e)}")
+# 프로세스 핸들 기반 종료 (추천, 윈도우에서 안전)
+def _terminate_idle_workers(self, count: int):
+    terminated = 0
+    for process in self.active_worker_processes[:]:
+        if process.poll() is None:  # 프로세스 살아있음
+            process.terminate()     # 안전 종료
+            api_logger.info(f"워커 프로세스 종료: PID {process.pid}")
+            terminated += 1
+            self.active_worker_processes.remove(process)
+        if terminated >= count:
+            break
+    api_logger.info(f"{terminated}개 워커 종료 완료")
