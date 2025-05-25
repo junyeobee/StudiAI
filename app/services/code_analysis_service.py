@@ -378,7 +378,7 @@ class CodeAnalysisService:
                     break
 
                 
-                
+
                 # 단순 참조 파일만 있는 경우: #[파일.py]
                 ref_match = re.search(r'\[([^\]]+\.py)\]', line)
                 if ref_match:
@@ -641,7 +641,7 @@ class CodeAnalysisService:
         """파일의 모든 함수 분석이 완료되었는지 확인"""
         
         # Redis에서 해당 파일의 모든 함수 키 조회
-        pattern = f"func:{filename}:*"
+        pattern = f"func:*:{filename}:*"
         function_keys = self.redis_client.keys(pattern)
         
         # 분석 대기 중인 함수가 있는지 큐에서 확인
@@ -667,7 +667,7 @@ class CodeAnalysisService:
         """파일 전체 흐름 분석 및 종합 요약 생성"""
         
         # 1. 파일의 모든 함수 요약 수집
-        pattern = f"func:{filename}:*"
+        pattern = f"func:*:{filename}:*"
         function_keys = self.redis_client.keys(pattern)
         
         function_summaries = {}
@@ -795,7 +795,6 @@ class CodeAnalysisService:
 
     **응답 형식:** 마크다운으로 구조화하여 Notion에서 읽기 좋게 작성
     """
-        print(analysis_prompt)
         # 4. LLM 호출하여 종합 분석
         file_analysis = await self._call_llm_for_file_analysis(analysis_prompt)
         
