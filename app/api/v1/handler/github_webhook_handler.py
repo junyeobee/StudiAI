@@ -6,7 +6,7 @@ from app.services.supa import get_active_webhooks
 from supabase._async.client import AsyncClient
 from typing import Dict, List, Optional, Tuple
 from app.utils.logger import api_logger
-from worker.tasks import analyze_code_task
+from worker.tasks import task_queue, analyze_code_task
 import json
 import hmac
 import hashlib
@@ -99,7 +99,7 @@ class GitHubWebhookHandler:
         return None
     
     async def _process_push_event(self, payload: Dict, verified_row: Dict, owner: str, repo: str):
-        """푸시 이벤트 처리 - Celery 태스크로 분석 작업 위임"""
+        """푸시 이벤트 처리 - RQ 태스크로 분석 작업 위임"""
         # 1. 커밋 정보 추출
         api_logger.info("커밋 정보 추출 시작")
         code_bundle = await GithubWebhookHelper.process_github_push_event(payload)
@@ -110,7 +110,7 @@ class GitHubWebhookHandler:
         decrypted_pat = await get_integration_token(verified_row["created_by"], "github", self.supabase)
         github_service = GitHubWebhookService(token=decrypted_pat)
         
-        # 3. 각 커밋에 대해 Celery 태스크 등록
+        # 3. 각 커밋에 대해 RQ 태스크 등록
         for i, commit in enumerate(code_bundle):
             api_logger.info(f"커밋 {i+1}/{len(code_bundle)} 분석 태스크 등록: {commit['sha'][:8]}")
             
@@ -139,8 +139,9 @@ class GitHubWebhookHandler:
                 elif status == "added" and "patch" in file:
                     file["full_content"] = file["patch"]
             
-            # Celery 태스크로 분석 작업 등록
-            analyze_code_task.delay(
+            # RQ 태스크로 분석 작업 등록
+            job = task_queue.enqueue(
+                analyze_code_task,
                 files=files,
                 owner=owner,
                 repo=repo,
@@ -148,6 +149,6 @@ class GitHubWebhookHandler:
                 user_id=verified_row["created_by"]
             )
             
-            api_logger.info(f"커밋 {commit['sha'][:8]} 분석 태스크 등록 완료")
+            api_logger.info(f"커밋 {commit['sha'][:8]} 분석 태스크 등록 완료 - Job ID: {job.id}")
         
         api_logger.info(f"총 {len(code_bundle)}개 커밋 분석 태스크 등록 완료")
