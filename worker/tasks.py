@@ -1,6 +1,7 @@
 import redis
 import asyncio
 import os
+import sys
 from typing import Dict, List
 from rq import Queue, SimpleWorker, Worker
 from rq.timeouts import TimerDeathPenalty
@@ -8,6 +9,9 @@ from app.services.code_analysis_service import CodeAnalysisService
 from app.core.config import settings
 from app.utils.logger import api_logger
 from supabase import create_client
+
+# 버퍼링 비활성화
+os.environ["PYTHONUNBUFFERED"] = "1"
 
 # 새로운 모듈들 import
 from worker.config import RQ_CONFIG
@@ -38,27 +42,35 @@ def analyze_code_task(files: List[Dict], owner: str, repo: str, commit_sha: str,
     """코드 분석 태스크 - RQ 워커에서 실행"""
     try:
         api_logger.info(f"RQ 워커에서 코드 분석 시작: {commit_sha[:8]}, 파일 수: {len(files)}")
+        sys.stdout.flush()
         api_logger.info(f"사용자 ID: {user_id}, 저장소: {owner}/{repo}")
+        sys.stdout.flush()
 
         asyncio.run(_analyze_code_async(files, owner, repo, commit_sha, user_id))
+        sys.stdout.flush()
 
         api_logger.info(f"RQ 워커 코드 분석 완료: {commit_sha[:8]}")
+        sys.stdout.flush()
         return {"status": "success", "commit_sha": commit_sha}
         
     except Exception as e:
         api_logger.error(f"RQ 워커 코드 분석 실패: {str(e)}")
+        sys.stdout.flush()
         raise e
 
 async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
     """비동기 코드 분석 실행"""
     try:
         api_logger.info("Supabase 클라이언트 생성 중...")
+        sys.stdout.flush()
         supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
         
         api_logger.info("분석 서비스 초기화 중...")
+        sys.stdout.flush()
         analysis_service = CodeAnalysisService(redis_conn, supabase)
         
         api_logger.info("코드 변경 분석 시작...")
+        sys.stdout.flush()
         await analysis_service.analyze_code_changes(
             files=files,
             owner=owner,
@@ -68,12 +80,15 @@ async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_s
         )
         
         api_logger.info("큐 처리 시작...")
+        sys.stdout.flush()
         await analysis_service.process_queue()
         
         api_logger.info("분석 완료")
+        sys.stdout.flush()
         
     except Exception as e:
         api_logger.error(f"비동기 분석 실행 오류: {str(e)}")
+        sys.stdout.flush()
         raise
 
 def create_optimized_worker():
@@ -127,6 +142,7 @@ def start_worker():
             burst=False,  # 지속적 실행
             logging_level='INFO'
         )
+        sys.stdout.flush()
             
     except KeyboardInterrupt:
         api_logger.info("워커 종료 신호 수신")

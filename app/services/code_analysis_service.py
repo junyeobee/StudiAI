@@ -7,7 +7,12 @@ import re
 import json
 import time
 import ast
+import sys
+import os
 from openai import OpenAI
+
+# 버퍼링 비활성화
+os.environ["PYTHONUNBUFFERED"] = "1"
 
 class CodeAnalysisService:
     """함수 중심 코드 분석 및 LLM 처리 서비스"""
@@ -19,6 +24,7 @@ class CodeAnalysisService:
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
         """코드 변경 분석 처리"""
         api_logger.info(f"함수별 분석 시작: {len(files)}개 파일")
+        sys.stdout.flush()
         
         for file in files:
             filename = file.get('filename', 'unknown')
@@ -66,6 +72,7 @@ class CodeAnalysisService:
                 await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
             
             api_logger.info(f"파일 '{filename}': {len(functions)}개 함수중 {len([f for f in functions if f.get('has_changes', True) or f.get('is_new_file', False)])}개 변경된 함수 분석 큐에 추가")
+            sys.stdout.flush()
     
     def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
         """diff 패치에서 상세 변경 정보 추출(라인)"""
@@ -420,6 +427,7 @@ class CodeAnalysisService:
     async def process_queue(self):
         """함수별 분석 큐 처리"""
         api_logger.info("함수별 분석 큐 처리 시작")
+        sys.stdout.flush()
         
         while not self.function_queue.empty():
             try:
@@ -431,6 +439,7 @@ class CodeAnalysisService:
                 continue
         
         api_logger.info("모든 함수 분석 완료")
+        sys.stdout.flush()
     
     async def _analyze_function(self, item: Dict):
         """개별 함수 분석 처리"""
@@ -441,6 +450,7 @@ class CodeAnalysisService:
         user_id = item['user_id']
         
         api_logger.info(f"함수 '{func_name}' 분석 시작")
+        sys.stdout.flush()
         
         # Redis에서 이전 분석 결과 조회
         redis_key = f"{user_id}:func:{commit_sha}:{filename}:{func_name}"
@@ -487,6 +497,7 @@ class CodeAnalysisService:
         await self._update_notion_if_needed(func_info, summary, user_id)
         
         api_logger.info(f"함수 '{func_name}' 분석 완료")
+        sys.stdout.flush()
     
     def _split_function_if_needed(self, code: str, max_length: int = 2000) -> List[str]:
         """함수가 너무 길면 청크로 분할"""
@@ -508,6 +519,7 @@ class CodeAnalysisService:
         
         for i, chunk in enumerate(chunks):
             api_logger.info(f"함수 '{func_info['name']}' 청크 {i+1}/{len(chunks)} 처리")
+            sys.stdout.flush()
             
             # 이전 요약을 포함한 LLM 호출
             chunk_summary = await self._call_llm_for_function(
@@ -604,7 +616,9 @@ class CodeAnalysisService:
                 {"role": "user", "content": full_prompt}
             ],
         )
-        return response.choices[0].message.content
+        result = response.choices[0].message.content
+        sys.stdout.flush()
+        return result
         
         print(full_prompt)
         # 임시 응답
@@ -852,7 +866,9 @@ class CodeAnalysisService:
                 {"role": "user", "content": prompt}
             ],
         )
-        return response.choices[0].message.content
+        result = response.choices[0].message.content
+        sys.stdout.flush()
+        return result
     
 
     async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str):
@@ -869,9 +885,11 @@ class CodeAnalysisService:
             # await notion_service.update_ai_summary_by_block(ai_block_id, file_summary)
             
             api_logger.info(f"파일 '{filename}' Notion 업데이트 완료")
+            sys.stdout.flush()
             
         except Exception as e:
             api_logger.error(f"Notion 업데이트 실패: {str(e)}")
+            sys.stdout.flush()
 
     async def _generate_architecture_suggestions(self, filename: str, file_summary: str, user_id: str):
         """아키텍처 개선 제안 생성 및 별도 저장"""
@@ -903,3 +921,4 @@ class CodeAnalysisService:
         self.redis_client.setex(suggestions_key, 86400 * 7, suggestions)  # 7일 보관
         
         api_logger.info(f"파일 '{filename}' 개선 제안 생성 완료")
+        sys.stdout.flush()
