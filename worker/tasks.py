@@ -111,23 +111,13 @@ def create_optimized_worker():
     
     # 플랫폼별 워커 생성
     if os.name == 'nt':  # Windows
-        # 환경변수로 워커 타입 선택 (기본: SpawnWorker)
-        worker_mode = os.getenv('WORKER_MODE', 'spawn').lower()
-        
-        if worker_mode == 'spawn':
-            worker = WindowsSpawnWorker(
-                [task_queue], 
-                connection=redis_conn,
-                exception_handlers=[handle_failed_job]
-            )
-            api_logger.info("Windows SpawnWorker 생성 (권장)")
-        else:
-            worker = WindowsSimpleWorker(
-                [task_queue], 
-                connection=redis_conn,
-                exception_handlers=[handle_failed_job]
-            )
-            api_logger.info("Windows SimpleWorker 생성")
+        # Windows에서는 무조건 SimpleWorker 사용 (os.wait4() 에러 방지)
+        worker = WindowsSimpleWorker(
+            [task_queue], 
+            connection=redis_conn,
+            exception_handlers=[handle_failed_job]
+        )
+        api_logger.info("Windows SimpleWorker 생성 (os.wait4() 에러 방지)")
             
     else:  # Unix/Linux
         worker = Worker(
