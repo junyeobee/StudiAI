@@ -16,7 +16,7 @@ class GitHubWebhookHandler:
     def __init__(self, supabase: AsyncClient):
         self.supabase = supabase
     
-    async def handle_webhook(self, request: Request, background_tasks: BackgroundTasks) -> Dict:
+    async def handle_webhook(self, request: Request) -> Dict:
         """메인 핸들러 함수: 웹훅 처리의 전체 흐름 관리"""
         try:
             api_logger.info("===== 웹훅 요청 수신 =====")
