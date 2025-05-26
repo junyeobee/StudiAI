@@ -687,7 +687,7 @@ class CodeAnalysisService:
         """파일의 모든 함수 분석이 완료되었는지 확인"""
         
         # Redis에서 해당 파일의 모든 함수 키 조회
-        pattern = f"func:*:{filename}:*"
+        pattern = f"{user_id}:func:*:{filename}:*"
         function_keys = self.redis_client.keys(pattern)
         
         # 분석 대기 중인 함수가 있는지 큐에서 확인
@@ -713,7 +713,7 @@ class CodeAnalysisService:
         """파일 전체 흐름 분석 및 종합 요약 생성"""
         
         # 1. 파일의 모든 함수 요약 수집
-        pattern = f"func:*:{filename}:*"
+        pattern = f"{user_id}:func:*:{filename}:*"
         function_keys = self.redis_client.keys(pattern)
         
         function_summaries = {}
@@ -845,7 +845,7 @@ class CodeAnalysisService:
         file_analysis = await self._call_llm_for_file_analysis(analysis_prompt)
         
         # 5. 분석 결과를 Redis에 캐싱 (파일 단위)
-        file_cache_key = f"file_analysis:{filename}"
+        file_cache_key = f"{user_id}:file_analysis:{filename}"
         self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis)  # 3일 보관
         
         return file_analysis
