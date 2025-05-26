@@ -875,14 +875,58 @@ class CodeAnalysisService:
         """Notion AI 요약 블록 업데이트"""
         
         try:
-            # 1. 해당 파일과 연관된 학습 페이지 찾기
-            # (여기서는 간단히 구현, 실제로는 Supabase에서 조회)
+
+            file_cache_key = f"{user_id}:file_analysis:{filename}"
+            func_keys = self.redis_client.keys(f"{user_id}:func:*:{filename}:*")
+            func_summaries = {}
+            for key in func_keys:
+                func_name = key.split(":")[-1]
+                summary = self.redis_client.get(key)
+                if summary:
+                    func_summaries[func_name] = summary
+
+            analysis_summary = f"""###{filename}전체 평가
+            {file_summary}
+
+            ### 함수별 평가
+            for func_name, summary in func_summaries.items():
+                f"**{func_name}()**:
+                {summary}
+            """
+            # 1단계: 현재 활성 학습 페이지 찾기
             
-            # 2. AI 요약 블록 ID 조회
-            # ai_block_id = await get_ai_block_id_by_filename(filename, user_id)
+            ## supabase에서 현재 사용중 db id 조회
+            #get_used_notion_db_id() → 현재 사용중인 DB 조회
+            #해당 DB에서 오늘 날짜 또는 최근 진행중 페이지 찾기
+            #Redis에 캐시해서 반복 조회 방지 (이미 구현됨.)
+
+            # 2단계: 해당 db에서 현재 진행중인 학습 페이지의 ai블록 id를 조회(여기가 실제로 커밋이 저장되는 페이지)
+
+            # 3단계: ai 요약 페이지에 커밋 분석 토글 블록 구조 생성
+
+            ## notion_service.py에 
+            # 4단계: 커밋 분석 토글 블록 구조 생성
+            # [토글] 📅 2025-05-26 커밋 분석 (abc1234)
+            # ├── [토글] 📁 code_analysis_service.py  
+            # │   ├── [토글] 🔍 전체 평가
+            # │   │   └── (마크다운 → 블록 변환된 내용)
+            # │   └── [토글] ⚙️ 함수별 평가
+            # │       └── (함수별 분석 내용)
+            # └── [토글] 📁 tasks.py
+            #     ├── [토글] 🔍 전체 평가  
+            #     └── [토글] ⚙️ 함수별 평가
+
+            # 5단계 : 새 토글 추가(날짜, 커밋 메시지)
+            # analysis_summary를 노션 블록 변환 (MD -> 노션 블록)
+
+            # append_blocks()
+
+            # 7단계: 에러 처리 및 로깅
+
+            # 각 단계별 실패 시 fallback 로직
+            # API 호출 실패 시 Redis에 재시도 큐 저장
+            # 성공/실패 로그 기록
             
-            # 3. Notion API로 블록 업데이트
-            # await notion_service.update_ai_summary_by_block(ai_block_id, file_summary)
             
             api_logger.info(f"파일 '{filename}' Notion 업데이트 완료")
             sys.stdout.flush()
