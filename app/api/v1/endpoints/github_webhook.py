@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Body, Request, BackgroundTasks, status, Response
+from fastapi import APIRouter, Depends, HTTPException, Body, Request, status, Response
 from app.services.github_webhook_service import GitHubWebhookService
 from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
@@ -90,9 +90,8 @@ async def get_repo_list(
 @public_router.post("/webhook_operation")
 async def handle_github_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
     supabase: AsyncClient = Depends(get_supabase)
 ):
     """GitHub 웹훅 이벤트 처리 엔드포인트"""
     handler = GitHubWebhookHandler(supabase)
-    return await handler.handle_webhook(request, background_tasks)
+    return await handler.handle_webhook(request)
