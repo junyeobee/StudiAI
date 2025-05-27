@@ -311,6 +311,7 @@ class PythonExtractor(BaseExtractor):
         except SyntaxError as e:
             api_logger.error(f"Python 파일 파싱 오류: {e}")
             # 파싱 실패 시 전체 파일을 하나의 함수로 처리
+            # 파싱 실패 일어나는 패턴 수집해야할듯
             return [{
                 'name': 'entire_file',
                 'type': 'file',
