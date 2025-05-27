@@ -201,8 +201,8 @@ class NotionService:
     # 학습 페이지 생성
     async def create_learning_page(self, database_id: str, plan: LearningPageCreate) -> tuple[str, str]:
         """
-        - 데이터 베이스에 페이지(row)를 생성하고 학습 목표, AI 요약 블록 템플릿 추가
-        - (page_id, ai_block_id) 튜플을 반환
+        - 데이터 베이스에 페이지(row)를 생성하고 학습 목표, 학습 내용, AI 분석 결과 템플릿 추가
+        - (page_id, ai_analysis_log_page_id) 튜플을 반환
         """
         # 1) 페이지 속성
         props = {
@@ -218,9 +218,9 @@ class NotionService:
         )
         page_id = page_resp["id"]
 
-        # 본문
+        # 2) 본문 블록 구성
         blocks: List[dict] = [
-            # 학습 목표
+            # 🧠 학습 목표
             {
                 "object":"block","type":"heading_2",
                 "heading_2":{"rich_text":[{"type":"text","text":{"content":"🧠 학습 목표"}}]}
@@ -230,6 +230,8 @@ class NotionService:
                 "quote":{"rich_text":[{"type":"text","text":{"content":plan.goal_intro}}]}
             },
         ]
+        
+        # 학습 목표 to-do 추가
         for goal in plan.goals:
             blocks.append({
                 "object": "block",
@@ -239,35 +241,107 @@ class NotionService:
                     "checked": False
                 }
             })
+        
+        # 구분선
         blocks.append({"object":"block","type":"divider","divider":{}})
 
-        # AI블록
-        blocks.extend([ 
+        # 📝 학습 내용
+        blocks.extend([
             {
                 "object":"block","type":"heading_2",
-                "heading_2":{"rich_text":[{"type":"text","text":{"content":"🤖 AI 요약 내용"}}]}
+                "heading_2":{"rich_text":[{"type":"text","text":{"content":"📝 학습 내용"}}]}
             },
             {
                 "object":"block","type":"quote",
-                "quote":{"rich_text":[{"type":"text","text":{"content":"학습 요약 정리를 자동화하거나 수동으로 작성하는 공간입니다."}}]}
+                "quote":{"rich_text":[{"type":"text","text":{"content":"학습한 내용을 정리하는 공간입니다."}}]}
             },
             {
-                "object":"block","type":"code",
-                "code":{
-                    "rich_text":[{"type":"text","text":{"content":plan.summary}}],
-                    "language":"markdown"
+                "object": "block",
+                "type": "paragraph",
+                "paragraph": {
+                    "rich_text": [{"type": "text", "text": {"content": ""}}]
                 }
             }
         ])
+        
+        # 구분선
+        blocks.append({"object":"block","type":"divider","divider":{}})
 
+        # 🤖 AI 분석 결과
+        blocks.extend([
+            {
+                "object":"block","type":"heading_2",
+                "heading_2":{"rich_text":[{"type":"text","text":{"content":"🤖 AI 분석 결과"}}]}
+            },
+            {
+                "object":"block","type":"quote",
+                "quote":{"rich_text":[{"type":"text","text":{"content":"MCP 요청과 커밋 분석 결과가 저장되는 공간입니다."}}]}
+            }
+        ])
+
+        # 3) 모든 블록들을 한 번에 페이지에 추가
         append_resp = await self._make_request(
             "PATCH",
             f"blocks/{page_id}/children",
             json={"children": blocks}
         )
-        ai_block_id = append_resp["results"][-1]["id"] #AI 요약 블록 ID
+        if not append_resp :
+            raise NotionAPIError(f"블록 추가 실패: {append_resp}")
 
-        return page_id, ai_block_id
+        # 4) 📄 종합 분석 로그 페이지를 별도로 생성
+        ai_analysis_page_props = {
+            "parent": {"page_id": page_id},
+            "properties": {
+                "title": {
+                    "title": [{"text": {"content": "Commit 분석 로그"}}]
+                }
+            }
+        }
+        ai_page_resp = await self._make_request(
+            "POST",
+            "pages",
+            json=ai_analysis_page_props
+        )
+        ai_analysis_log_page_id = ai_page_resp["id"]
+
+        # 5) 마크다운을 노션 블록으로 변환하여 메인 페이지에 직접 추가
+        from app.utils.notion_utils import markdown_to_notion_blocks
+        summary_blocks = markdown_to_notion_blocks(plan.summary)
+        
+        await self._make_request(
+            "PATCH",
+            f"blocks/{page_id}/children",
+            json={"children": summary_blocks}
+        )
+
+        # 6) 종합 분석 로그 페이지에는 기본 안내 내용만 추가
+        log_blocks = [
+            {
+                "object": "block",
+                "type": "quote",
+                "quote": {
+                    "rich_text": [
+                        {
+                            "type": "text",
+                            "text": {"content": "이 페이지는 커밋된 코드를 분석한 결과가 토글로 저장되는 공간입니다."}
+                        }
+                    ]
+                }
+            },
+            {
+                "object": "block",
+                "type": "divider",
+                "divider": {}
+            }
+        ]
+        
+        await self._make_request(
+            "PATCH",
+            f"blocks/{ai_analysis_log_page_id}/children",
+            json={"children": log_blocks}
+        )
+
+        return page_id, ai_analysis_log_page_id
     
     # 데이터베이스 내 모든 페이지 조회
     async def list_all_pages(self, database_id: str) -> List[Dict[str, Any]]:
@@ -391,29 +465,61 @@ class NotionService:
                 json=payload
             )
 
-    # 요약 블록 업데이트
-    async def update_ai_summary_by_block(self, block_id: str, summary: str) -> None:
+    # 요약 페이지 업데이트
+    async def update_ai_summary_by_page(self, page_id: str, summary: str) -> None:
         """
-        AI 요약 블록 ID를 받아서 해당 블록 업데이트
+        AI 요약 페이지 ID를 받아서 해당 페이지의 코드 블록 업데이트
         """
-        await self._make_request(
-            "PATCH",
-            f"blocks/{block_id}",
-            json={
+        # 페이지 내 모든 블록 조회
+        resp = await self._make_request(
+            "GET",
+            f"blocks/{page_id}/children",
+            params={"page_size": 100}
+        )
+        blocks = resp.get("results", [])
+        
+        # 코드 블록 찾기
+        code_block = None
+        for block in blocks:
+            if block.get("type") == "code":
+                code_block = block
+                break
+        
+        if code_block:
+            # 기존 코드 블록 업데이트
+            await self._make_request(
+                "PATCH",
+                f"blocks/{code_block['id']}",
+                json={
+                    "code": {
+                        "rich_text": [{"type": "text", "text": {"content": summary}}],
+                        "language": "markdown"
+                    }
+                }
+            )
+        else:
+            # 코드 블록이 없으면 새로 추가
+            new_block = {
+                "object": "block",
+                "type": "code",
                 "code": {
                     "rich_text": [{"type": "text", "text": {"content": summary}}],
                     "language": "markdown"
                 }
             }
-        )
+            await self._make_request(
+                "PATCH",
+                f"blocks/{page_id}/children",
+                json={"children": [new_block]}
+            )
 
     # 학습 페이지 종합 업데이트
-    async def update_learning_page_comprehensive(self, ai_block_id: str, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
+    async def update_learning_page_comprehensive(self, ai_page_id: str, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
         """
         page_id 받아서 각 속성마다 존재한다면 업데이트
         1. 속성 업데이트
         2. 목표 섹션 업데이트
-        3. 요약 블록 업데이트
+        3. 요약 페이지 업데이트
         """
         # 1. 속성 업데이트
         if props:
@@ -423,9 +529,9 @@ class NotionService:
         if goal_intro is not None or goals is not None:
             await self.update_goal_section(page_id, goal_intro, goals)
 
-        # 3. 요약 블록
-        if ai_block_id is not None:
-            await self.update_ai_summary_by_block(ai_block_id, summary)
+        # 3. 요약 페이지
+        if ai_page_id is not None and summary is not None:
+            await self.update_ai_summary_by_page(ai_page_id, summary)
 
 
     # 페이지 메타 및 블록 조회

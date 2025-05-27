@@ -42,7 +42,7 @@ redis_port = int(settings.REDIS_PORT)
 redis_password = settings.REDIS_PASSWORD
 
 # Redis 연결
-redis_conn = redis.Redis(host=redis_host, port=redis_port, password=redis_password)
+redis_conn = redis.Redis(host=redis_host, port=redis_port, password=redis_password, decode_responses=True)
 
 # RQ 큐 생성 (설정 적용)
 task_queue = Queue(

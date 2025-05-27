@@ -27,8 +27,10 @@ from app.api.v1.dependencies.auth import require_user
 from app.api.v1.dependencies.notion import get_notion_service
 from app.utils.logger import api_logger
 from app.core.redis_connect import get_redis
+from app.services.redis_service import RedisService
 
 router = APIRouter()
+redis_service = RedisService()
 
 @router.get("/pages")
 async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:str = Depends(require_user), current: bool = False, db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
@@ -39,10 +41,11 @@ async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:st
     둘 다 지정시 db_id 결과
     """
     try:
+        workspace_id = await redis_service.get_user_workspace(user_id, redis)
         target_db_id = db_id
         if not target_db_id:
             if current:
-                target_db_id = await get_used_notion_db_id(supabase, user_id)
+                target_db_id = await get_used_notion_db_id(supabase, workspace_id)
             else:
                 api_logger.error("학습 페이지 목록 조회 실패: db_id 또는 current=true 중 하나는 필수입니다.")
                 raise HTTPException(400, "db_id 또는 current=true 중 하나는 필수입니다.")
@@ -97,7 +100,6 @@ async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depend
 
 @router.patch("/pages/{page_id}")
 async def patch_page(page_id: str, req: PageUpdateRequest, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
-    print(req)
     payload = jsonable_encoder(req, by_alias=True, exclude_none=True)
     props = payload.get("props")
     content = payload.get("content")

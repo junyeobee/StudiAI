@@ -107,13 +107,13 @@ EXAMPLE_MAP: dict[str, str] = {
     # 페이지 수정
     "page_tool.update": (
         "필수: page_id | payload.props[title,date,status,revisit],payload.content[goal_intro,goals],payload.summary[summary]\n"
-        "{\"payload\":{\"page_id\":\"\",\"props\":{\"title\":\"새 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"진행중\",\"revisit\":true},\"content\":{\"goal_intro\":\"수정된 목표 소개\",\"goals\":[\"새 목표1\",\"새 목표2\"]},\"summary\":{\"summary\":\"수정된 요약\"}}"
+        "{\"payload\":{\"page_id\":\"\",\"props\":{\"title\":\"새 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"진행중\",\"revisit\":true},\"content\":{\"goal_intro\":\"수정된 목표 소개\",\"goals\":[\"새 목표1\",\"새 목표2\"]},\"summary\":{\"summary\":\"마크다운 형식으로 작성 (한 라인에 하나의 요소만)\\n예시:내용...\\n예시)#내용...\\n>내용...\\n\"}}"
     ),
 
     # 페이지 생성
     "page_tool.create": (
         "필수: notion_db_id, plans[title,date,status,revisit,goal_intro,goals,summary]\n"
-        "{\"payload\":{\"notion_db_id\":\"\",\"plans\":[{\"title\":\"학습 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"시작 전\",\"revisit\":false,\"goal_intro\":\"학습 목표 소개\",\"goals\":[\"목표1\",\"목표2\"],\"summary\":\"# 마크다운 형식 요약\\n내용...\"}]}}"
+        "{\"payload\":{\"notion_db_id\":\"\",\"plans\":[{\"title\":\"학습 제목\",\"date\":\"2025-05-06T00:00:00Z\",\"status\":\"시작 전\",\"revisit\":false,\"goal_intro\":\"학습 목표 소개\",\"goals\":[\"목표1\",\"목표2\"],\"summary\":\"마크다운 형식으로 작성 (한 라인에 하나의 요소만)\\n예시:내용...\\n예시)#내용...\\n>내용...\\n\"}]}}"
     ),
 
     # DB 페이지 조회
