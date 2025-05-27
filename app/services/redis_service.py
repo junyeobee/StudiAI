@@ -137,6 +137,7 @@ class RedisService:
         print(state_uuid)
         redis_client.set(key, state_uuid, ex=expire_seconds)
         return state_uuid
+        
 
     async def validate_state_uuid(self, user_id: str, uuid_to_check: str, redis_client: redis.Redis) -> bool:
         """
@@ -151,4 +152,35 @@ class RedisService:
             return True
         
         return False
+    
+    async def get_func_analysis_key(self, user_id: str, commit_sha: str, filename: str, func_name: str, redis_client: redis.Redis) -> str:
+        """
+        함수 분석 생성
+        """
+        redis_key = f"{user_id}:func:{commit_sha}:{filename}:{func_name}"
+        cached_result = redis_client.get(redis_key)
+        return cached_result
+    
+    async def get_file_analysis_key(self, user_id: str, commit_sha: str, filename: str, redis_client: redis.Redis) -> str:
+        """
+        함수 분석 반환
+        """
+        redis_key = f"{user_id}:file:{commit_sha}:{filename}"
+        cached_result = redis_client.get(redis_key)
+        return cached_result
         
+    async def set_func_analysis_key(self,analysis_result:str, user_id:str, commit_sha:str, filename:str, func_name:str, redis_client: redis.Redis) -> bool:
+        """
+        함수 분석 저장
+        """
+        redis_key = f"{user_id}:func:{commit_sha}:{filename}:{func_name}"
+        result = redis_client.set(redis_key, analysis_result)
+        return result
+    
+    async def set_file_analysis_key(self,analysis_result:str, user_id:str, commit_sha:str, filename:str, redis_client: redis.Redis) -> bool:
+        """
+        파일 분석 저장
+        """
+        redis_key = f"{user_id}:file:{commit_sha}:{filename}"
+        result = redis_client.set(redis_key, analysis_result)
+        return result

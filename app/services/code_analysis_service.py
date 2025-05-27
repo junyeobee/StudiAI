@@ -6,10 +6,11 @@ import asyncio
 import re
 import json
 import time
-import ast
 import sys
 import os
 from openai import OpenAI
+from app.services.redis_service import RedisService
+from app.services.extract_for_file_service import extract_functions_by_type
 
 # 버퍼링 비활성화
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -18,6 +19,7 @@ class CodeAnalysisService:
     """함수 중심 코드 분석 및 LLM 처리 서비스"""
     def __init__(self, redis_client: Redis, supabase: AsyncClient):
         self.redis_client = redis_client
+        self.redis_service = RedisService()
         self.supabase = supabase
         self.function_queue = asyncio.Queue()
     
@@ -154,215 +156,10 @@ class CodeAnalysisService:
         return '\n'.join(lines), diff_info
     
     async def _extract_functions_from_file(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
-        """파일에서 함수/메서드를 개별적으로 추출"""
-        ext = filename.split('.')[-1].lower() if '.' in filename else ''
+        """파일에서 함수/메서드를 개별적으로 추출 (새로운 레지스트리 패턴 사용)"""
+               
+        return await extract_functions_by_type(file_content, filename, diff_info)
         
-        #python일 경우, ast사용
-        if ext == 'py':
-            return await self._extract_python_functions(file_content, filename, diff_info)
-        else:
-            return await self._extract_generic_functions(file_content, filename, diff_info, ext)
-    
-    async def _extract_python_functions(self, file_content: str, filename: str, diff_info: Dict) -> List[Dict]:
-        """Python 파일에서 함수/메서드 개별 추출 (AST 사용)"""
-        functions = []
-        api_logger.info(f"Python 파일 파싱 시작: {file_content}")
-        try:
-            tree = ast.parse(file_content)
-            lines = file_content.splitlines()
-            
-            # 전역 임포트 및 상수 수집
-            global_code = []
-            function_lines = set()
-            
-            for node in ast.walk(tree):
-                # 클래스 정의 처리
-                if isinstance(node, ast.ClassDef):
-                    class_start = node.lineno
-                    class_end = getattr(node, 'end_lineno', class_start)
-                    
-                    # 클래스 내 메서드들을 개별 함수로 처리
-                    for item in node.body:
-                        if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                            method_start = item.lineno
-                            method_end = getattr(item, 'end_lineno', method_start)
-                            
-                            # 메서드 코드 추출
-                            method_code = '\n'.join(lines[method_start-1:method_end])
-                            
-                            # 메서드 관련 변경 사항 찾기
-                            method_changes = {
-                                line_num: change for line_num, change in diff_info.items()
-                                if method_start <= line_num <= method_end
-                            }
-                            
-                            function_name = f"{node.name}.{item.name}"  # 클래스.메서드 형식
-                            
-                            functions.append({
-                                'name': function_name,
-                                'type': 'method',
-                                'code': method_code,
-                                'start_line': method_start,
-                                'end_line': method_end,
-                                'filename': filename,
-                                'class_name': node.name,
-                                'changes': method_changes,
-                                'has_changes': bool(method_changes)
-                            })
-                            
-                            # 함수 라인 기록
-                            function_lines.update(range(method_start, method_end + 1))
-                
-                # 독립 함수 처리
-                elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-                    # 클래스 내부가 아닌 독립 함수만
-                    parent_classes = [n for n in ast.walk(tree) if isinstance(n, ast.ClassDef)]
-                    is_in_class = any(
-                        class_node.lineno <= node.lineno <= getattr(class_node, 'end_lineno', class_node.lineno)
-                        for class_node in parent_classes
-                    )
-                    
-                    if not is_in_class:
-                        func_start = node.lineno
-                        func_end = getattr(node, 'end_lineno', func_start)
-                        
-                        func_code = '\n'.join(lines[func_start-1:func_end])
-                        
-                        func_changes = {
-                            line_num: change for line_num, change in diff_info.items()
-                            if func_start <= line_num <= func_end
-                        }
-                        
-                        functions.append({
-                            'name': node.name,
-                            'type': 'function',
-                            'code': func_code,
-                            'start_line': func_start,
-                            'end_line': func_end,
-                            'filename': filename,
-                            'changes': func_changes,
-                            'has_changes': bool(func_changes)
-                        })
-                        
-                        function_lines.update(range(func_start, func_end + 1))
-            
-            # 전역 코드 (임포트, 상수 등) 처리
-            global_lines = []
-            global_changes = {}
-            
-            for i, line in enumerate(lines, 1):
-                if i not in function_lines:
-                    global_lines.append(line)
-                    if i in diff_info:
-                        global_changes[i] = diff_info[i]
-            
-            if global_lines or global_changes:
-                functions.insert(0, {
-                    'name': 'globals_and_imports',
-                    'type': 'global',
-                    'code': '\n'.join(global_lines),
-                    'start_line': 1,
-                    'end_line': len(lines),
-                    'filename': filename,
-                    'changes': global_changes,
-                    'has_changes': bool(global_changes)
-                })
-            
-            return functions
-            
-        except SyntaxError as e:
-            api_logger.error(f"Python 파일 파싱 오류: {e}")
-            # 파싱 실패 시 전체 파일을 하나의 함수로 처리
-            return [{
-                'name': 'entire_file',
-                'type': 'file',
-                'code': file_content,
-                'start_line': 1,
-                'end_line': len(file_content.splitlines()),
-                'filename': filename,
-                'changes': diff_info,
-                'has_changes': bool(diff_info)
-            }]
-    
-    async def _extract_generic_functions(self, file_content: str, filename: str, diff_info: Dict, ext: str) -> List[Dict]:
-        """일반 언어의 함수 추출 (정규식 기반)"""
-        functions = []
-        lines = file_content.splitlines()
-        
-        # 언어별 함수 패턴
-        patterns = {
-            'js': r'(?:function\s+(\w+)|const\s+(\w+)\s*=.*?function|(\w+)\s*:\s*(?:async\s+)?function)',
-            'ts': r'(?:function\s+(\w+)|const\s+(\w+)\s*=.*?function|(\w+)\s*:\s*(?:async\s+)?function)',
-            'java': r'(?:public|private|protected)?\s*(?:static\s+)?[\w<>]+\s+(\w+)\s*\(',
-            'c': r'[\w\*\s]+\s+(\w+)\s*\([^)]*\)\s*\{',
-            'cpp': r'[\w\*\s:]+\s+(\w+)\s*\([^)]*\)\s*\{',
-        }
-        
-        pattern = patterns.get(ext, r'[\w\s]+\s+(\w+)\s*\([^)]*\)\s*\{')
-        
-        for match in re.finditer(pattern, file_content, re.MULTILINE):
-            func_name = next((g for g in match.groups() if g), "unknown")
-            func_start_pos = match.start()
-            
-            # 함수 시작 라인 계산
-            func_start_line = file_content[:func_start_pos].count('\n') + 1
-            
-            # 중괄호 매칭으로 함수 끝 찾기
-            func_end_line = self._find_function_end(file_content, func_start_pos)
-            
-            if func_end_line > func_start_line:
-                func_code = '\n'.join(lines[func_start_line-1:func_end_line])
-                
-                func_changes = {
-                    line_num: change for line_num, change in diff_info.items()
-                    if func_start_line <= line_num <= func_end_line
-                }
-                
-                functions.append({
-                    'name': func_name,
-                    'type': 'function',
-                    'code': func_code,
-                    'start_line': func_start_line,
-                    'end_line': func_end_line,
-                    'filename': filename,
-                    'changes': func_changes,
-                    'has_changes': bool(func_changes)
-                })
-        
-        # 함수가 없으면 전체 파일을 하나의 단위로 처리
-        if not functions:
-            functions.append({
-                'name': 'entire_file',
-                'type': 'file',
-                'code': file_content,
-                'start_line': 1,
-                'end_line': len(lines),
-                'filename': filename,
-                'changes': diff_info,
-                'has_changes': bool(diff_info)
-            })
-        
-        return functions
-    
-    def _find_function_end(self, content: str, start_pos: int) -> int:
-        """중괄호 매칭으로 함수 끝 위치 찾기"""
-        brace_count = 0
-        i = start_pos
-        found_first_brace = False
-        
-        while i < len(content):
-            char = content[i]
-            if char == '{':
-                brace_count += 1
-                found_first_brace = True
-            elif char == '}':
-                brace_count -= 1
-                if found_first_brace and brace_count == 0:
-                    return content[:i+1].count('\n') + 1
-            i += 1
-        
-        return content[:start_pos].count('\n') + 10  # 기본값
-    
     async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, owner: str, repo: str):
         """함수별 분석 작업을 큐에 추가 - 변경된 함수 + 새 파일"""
         
