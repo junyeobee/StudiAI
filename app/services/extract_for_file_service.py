@@ -1,7 +1,7 @@
 import ast
 import re
 from abc import ABC, abstractmethod
-from typing import Dict, List, Any, Optional, Type
+from typing import Dict, List, Any, Optional, Type, Tuple
 from app.utils.logger import api_logger
 
 
@@ -12,6 +12,98 @@ class BaseExtractor(ABC):
     async def extract_functions(self, content: str, filename: str, diff_info: Dict[int, Dict]) -> List[Dict[str, Any]]:
         """파일에서 함수들을 추출하는 추상 메서드"""
         pass
+    
+    def _get_language_patterns(self) -> Dict[str, Any]:
+        """언어별 패턴 정의 (각 언어에서 오버라이드)"""
+        return {
+            'line_comments': ['//'],           # 라인 주석 패턴
+            'block_comments': [('/*', '*/')], # 블록 주석 패턴 (시작, 끝)
+            'doc_comments': ['/**'],           # 문서화 주석 패턴
+            'decorators': ['@'],               # 데코레이터/어노테이션 패턴
+            'stop_keywords': ['function', 'class', 'const', 'let', 'var']  # 중단 키워드들
+        }
+    
+    def _extract_function_with_context(self, lines: List[str], func_start: int, func_end: int, func_name: str) -> Tuple[str, int]:
+        """역방향 스캔으로 함수와 관련 컨텍스트(데코레이터, 주석, 독스트링) 추출"""
+        patterns = self._get_language_patterns()
+        
+        # 1. 함수 시작점에서 위로 역방향 스캔
+        actual_start = func_start
+        empty_line_count = 0
+        in_block_comment = False
+        block_comment_start = None
+        
+        for i in range(func_start - 2, -1, -1):  # func_start-1부터 역순으로 (0-based)
+            line = lines[i].strip()
+            
+            # 빈 줄 처리
+            if not line:
+                empty_line_count += 1
+                if empty_line_count >= 2:  # 연속 빈 줄 2개면 중단
+                    break
+                continue
+            else:
+                empty_line_count = 0
+            
+            # 블록 주석 처리 (역방향이므로 끝부터 찾음)
+            for block_start, block_end in patterns['block_comments']:
+                if line.endswith(block_end) and not in_block_comment:
+                    in_block_comment = True
+                    block_comment_start = block_start
+                    actual_start = i + 1  # 1-based로 변환
+                    continue
+                elif line.startswith(block_comment_start) and in_block_comment:
+                    in_block_comment = False
+                    actual_start = i + 1  # 1-based로 변환
+                    continue
+            
+            if in_block_comment:
+                actual_start = i + 1  # 1-based로 변환
+                continue
+            
+            # 포함할 것들 체크
+            should_include = False
+            
+            # 데코레이터/어노테이션
+            for decorator_pattern in patterns['decorators']:
+                if line.startswith(decorator_pattern):
+                    should_include = True
+                    break
+            
+            # 라인 주석
+            if not should_include:
+                for comment_pattern in patterns['line_comments']:
+                    if line.startswith(comment_pattern):
+                        should_include = True
+                        break
+            
+            # 문서화 주석
+            if not should_include:
+                for doc_pattern in patterns['doc_comments']:
+                    if line.startswith(doc_pattern):
+                        should_include = True
+                        break
+            
+            if should_include:
+                actual_start = i + 1  # 1-based로 변환
+                continue
+            
+            # 중단 조건: 다른 정의들
+            should_stop = False
+            for keyword in patterns['stop_keywords']:
+                if line.startswith(keyword + ' ') or line.startswith(keyword + '\t'):
+                    should_stop = True
+                    break
+            
+            if should_stop:
+                break
+        
+        # 2. 실제 시작점부터 함수 끝까지 코드 추출
+        full_code = '\n'.join(lines[actual_start-1:func_end])
+        
+        api_logger.info(f"함수 '{func_name}' 컨텍스트 추출: {actual_start}~{func_end} 라인 ({func_end - actual_start + 1}줄)")
+        
+        return full_code, actual_start
     
     def _find_function_end_by_braces(self, content: str, start_pos: int) -> int:
         """중괄호 매칭으로 함수 끝 위치 찾기 (C계열 언어용)"""
@@ -93,6 +185,16 @@ class ExtractorRegistry:
 class PythonExtractor(BaseExtractor):
     """Python 파일 함수 추출기 (AST 사용)"""
     
+    def _get_language_patterns(self) -> Dict[str, Any]:
+        """Python 언어 패턴 정의"""
+        return {
+            'line_comments': ['#'],
+            'block_comments': [('"""', '"""'), ("'''", "'''")],
+            'doc_comments': ['"""', "'''"],
+            'decorators': ['@'],
+            'stop_keywords': ['def', 'async def', 'class', 'import', 'from']
+        }
+    
     async def extract_functions(self, content: str, filename: str, diff_info: Dict[int, Dict]) -> List[Dict[str, Any]]:
         """Python 파일에서 함수/메서드 개별 추출 (AST 사용)"""
         functions = []
@@ -117,13 +219,15 @@ class PythonExtractor(BaseExtractor):
                             method_start = item.lineno
                             method_end = getattr(item, 'end_lineno', method_start)
                             
-                            # 메서드 코드 추출
-                            method_code = '\n'.join(lines[method_start-1:method_end])
+                            # 메서드 코드 추출 (컨텍스트 포함)
+                            method_code, actual_start = self._extract_function_with_context(
+                                lines, method_start, method_end, f"{node.name}.{item.name}"
+                            )
                             
                             # 메서드 관련 변경 사항 찾기
                             method_changes = {
                                 line_num: change for line_num, change in diff_info.items()
-                                if method_start <= line_num <= method_end
+                                if actual_start <= line_num <= method_end
                             }
                             
                             function_name = f"{node.name}.{item.name}"  # 클래스.메서드 형식
@@ -132,7 +236,7 @@ class PythonExtractor(BaseExtractor):
                                 'name': function_name,
                                 'type': 'method',
                                 'code': method_code,
-                                'start_line': method_start,
+                                'start_line': actual_start,
                                 'end_line': method_end,
                                 'filename': filename,
                                 'class_name': node.name,
@@ -140,8 +244,8 @@ class PythonExtractor(BaseExtractor):
                                 'has_changes': bool(method_changes)
                             })
                             
-                            # 함수 라인 기록
-                            function_lines.update(range(method_start, method_end + 1))
+                            # 함수 라인 기록 (컨텍스트 포함)
+                            function_lines.update(range(actual_start, method_end + 1))
                 
                 # 독립 함수 처리
                 elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -156,25 +260,28 @@ class PythonExtractor(BaseExtractor):
                         func_start = node.lineno
                         func_end = getattr(node, 'end_lineno', func_start)
                         
-                        func_code = '\n'.join(lines[func_start-1:func_end])
+                        # 독립 함수 코드 추출 (컨텍스트 포함)
+                        func_code, actual_start = self._extract_function_with_context(
+                            lines, func_start, func_end, node.name
+                        )
                         
                         func_changes = {
                             line_num: change for line_num, change in diff_info.items()
-                            if func_start <= line_num <= func_end
+                            if actual_start <= line_num <= func_end
                         }
                         
                         functions.append({
                             'name': node.name,
                             'type': 'function',
                             'code': func_code,
-                            'start_line': func_start,
+                            'start_line': actual_start,
                             'end_line': func_end,
                             'filename': filename,
                             'changes': func_changes,
                             'has_changes': bool(func_changes)
                         })
                         
-                        function_lines.update(range(func_start, func_end + 1))
+                        function_lines.update(range(actual_start, func_end + 1))
             
             # 전역 코드 (임포트, 상수 등) 처리
             global_lines = []
@@ -220,6 +327,16 @@ class PythonExtractor(BaseExtractor):
 class JavaScriptExtractor(BaseExtractor):
     """JavaScript/TypeScript 파일 함수 추출기"""
     
+    def _get_language_patterns(self) -> Dict[str, Any]:
+        """JavaScript/TypeScript 언어 패턴 정의"""
+        return {
+            'line_comments': ['//'],
+            'block_comments': [('/*', '*/'), ('/**', '*/')],
+            'doc_comments': ['/**'],
+            'decorators': ['@'],  # TypeScript 데코레이터
+            'stop_keywords': ['function', 'class', 'const', 'let', 'var', 'import', 'export']
+        }
+    
     async def extract_functions(self, content: str, filename: str, diff_info: Dict[int, Dict]) -> List[Dict[str, Any]]:
         """JavaScript/TypeScript 파일에서 함수 추출"""
         functions = []
@@ -246,18 +363,21 @@ class JavaScriptExtractor(BaseExtractor):
                 func_end_line = self._find_function_end_by_braces(content, func_start_pos)
                 
                 if func_end_line > func_start_line:
-                    func_code = '\n'.join(lines[func_start_line-1:func_end_line])
+                    # 함수 코드 추출 (컨텍스트 포함)
+                    func_code, actual_start = self._extract_function_with_context(
+                        lines, func_start_line, func_end_line, func_name
+                    )
                     
                     func_changes = {
                         line_num: change for line_num, change in diff_info.items()
-                        if func_start_line <= line_num <= func_end_line
+                        if actual_start <= line_num <= func_end_line
                     }
                     
                     functions.append({
                         'name': func_name,
                         'type': 'function',
                         'code': func_code,
-                        'start_line': func_start_line,
+                        'start_line': actual_start,
                         'end_line': func_end_line,
                         'filename': filename,
                         'changes': func_changes,
@@ -285,6 +405,16 @@ class JavaScriptExtractor(BaseExtractor):
 class JavaExtractor(BaseExtractor):
     """Java 파일 함수 추출기"""
     
+    def _get_language_patterns(self) -> Dict[str, Any]:
+        """Java 언어 패턴 정의"""
+        return {
+            'line_comments': ['//'],
+            'block_comments': [('/*', '*/'), ('/**', '*/')],
+            'doc_comments': ['/**'],
+            'decorators': ['@'],  # Java 어노테이션
+            'stop_keywords': ['public', 'private', 'protected', 'class', 'interface', 'import', 'package']
+        }
+    
     async def extract_functions(self, content: str, filename: str, diff_info: Dict[int, Dict]) -> List[Dict[str, Any]]:
         """Java 파일에서 메서드 추출"""
         functions = []
@@ -304,18 +434,21 @@ class JavaExtractor(BaseExtractor):
             method_end_line = self._find_function_end_by_braces(content, method_start_pos)
             
             if method_end_line > method_start_line:
-                method_code = '\n'.join(lines[method_start_line-1:method_end_line])
+                # 메서드 코드 추출 (컨텍스트 포함)
+                method_code, actual_start = self._extract_function_with_context(
+                    lines, method_start_line, method_end_line, method_name
+                )
                 
                 method_changes = {
                     line_num: change for line_num, change in diff_info.items()
-                    if method_start_line <= line_num <= method_end_line
+                    if actual_start <= line_num <= method_end_line
                 }
                 
                 functions.append({
                     'name': method_name,
                     'type': 'method',
                     'code': method_code,
-                    'start_line': method_start_line,
+                    'start_line': actual_start,
                     'end_line': method_end_line,
                     'filename': filename,
                     'changes': method_changes,
@@ -343,6 +476,16 @@ class JavaExtractor(BaseExtractor):
 class CExtractor(BaseExtractor):
     """C/C++ 파일 함수 추출기"""
     
+    def _get_language_patterns(self) -> Dict[str, Any]:
+        """C/C++ 언어 패턴 정의"""
+        return {
+            'line_comments': ['//'],
+            'block_comments': [('/*', '*/'), ('/**', '*/')],
+            'doc_comments': ['/**'],
+            'decorators': ['[['],  # C++11 attributes
+            'stop_keywords': ['int', 'void', 'char', 'float', 'double', 'struct', 'class', 'typedef', '#include', '#define']
+        }
+    
     async def extract_functions(self, content: str, filename: str, diff_info: Dict[int, Dict]) -> List[Dict[str, Any]]:
         """C/C++ 파일에서 함수 추출"""
         functions = []
@@ -362,18 +505,21 @@ class CExtractor(BaseExtractor):
             func_end_line = self._find_function_end_by_braces(content, func_start_pos)
             
             if func_end_line > func_start_line:
-                func_code = '\n'.join(lines[func_start_line-1:func_end_line])
+                # 함수 코드 추출 (컨텍스트 포함)
+                func_code, actual_start = self._extract_function_with_context(
+                    lines, func_start_line, func_end_line, func_name
+                )
                 
                 func_changes = {
                     line_num: change for line_num, change in diff_info.items()
-                    if func_start_line <= line_num <= func_end_line
+                    if actual_start <= line_num <= func_end_line
                 }
                 
                 functions.append({
                     'name': func_name,
                     'type': 'function',
                     'code': func_code,
-                    'start_line': func_start_line,
+                    'start_line': actual_start,
                     'end_line': func_end_line,
                     'filename': filename,
                     'changes': func_changes,
