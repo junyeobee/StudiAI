@@ -12,7 +12,8 @@ from app.services.supa import (
     insert_learning_page,
     get_used_notion_db_id,
     get_ai_block_id_by_page_id,
-    delete_learning_page
+    delete_learning_page,
+    list_all_learning_databases
 )
 from app.utils.logger import api_logger
 from app.utils.notion_utils import(
@@ -24,7 +25,7 @@ from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
 from fastapi import Depends
 from app.api.v1.dependencies.auth import require_user
-from app.api.v1.dependencies.notion import get_notion_service
+from app.api.v1.dependencies.notion import get_notion_service, get_notion_db_list
 from app.utils.logger import api_logger
 from app.core.redis_connect import get_redis
 from app.services.redis_service import RedisService
@@ -68,7 +69,7 @@ async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:st
         raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
-async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def create_pages(req: LearningPagesRequest, pages: list = Depends(get_notion_db_list), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     notion_db_id = req.notion_db_id
     results = []
 
@@ -76,7 +77,9 @@ async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depend
         try:
             # 새로운 학습 행 생성
             page_id, ai_block_id = await notion_service.create_learning_page(notion_db_id, plan)
-
+            
+            if page_id not in pages:
+                raise HTTPException(400, "학습 페이지 생성 실패: 유효한 DB가 아닙니다.")
             # 생성된 학습 행에 대한 메타 저장
             saved = await insert_learning_page(
                 date=plan.date.isoformat(),
@@ -99,22 +102,16 @@ async def create_pages(req: LearningPagesRequest, supabase: AsyncClient = Depend
     }
 
 @router.patch("/pages/{page_id}")
-async def patch_page(page_id: str, req: PageUpdateRequest, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def patch_page(page_id: str, req: PageUpdateRequest, notion_service: NotionService = Depends(get_notion_service)):
     payload = jsonable_encoder(req, by_alias=True, exclude_none=True)
     props = payload.get("props")
     content = payload.get("content")
     summary = payload.get("summary").get("summary") if payload.get("summary") else None
-    
-    if summary is not None:
-        ai_block_id = await get_ai_block_id_by_page_id(page_id, supabase)
-    else:
-        ai_block_id = None
-    
+        
     if props is not None:
         props = serialize_page_props(props)
     try:
         await notion_service.update_learning_page_comprehensive(
-            ai_block_id,
             page_id,
             props=props if props else None,
             goal_intro=content.get("goal_intro") if content else None,

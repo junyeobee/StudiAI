@@ -184,3 +184,51 @@ class RedisService:
         redis_key = f"{user_id}:file:{commit_sha}:{filename}"
         result = redis_client.set(redis_key, analysis_result)
         return result
+    
+    async def get_db_pages(self, user_id:str, notion_db_id: str, redis_client: redis.Redis) -> list:
+        """
+        데이터베이스 페이지 정보를 Redis에서 가져옴
+        """
+        redis_key = f"user:{user_id}:db:{notion_db_id}:pages"
+        cached_result = redis_client.get(redis_key)
+        return cached_result
+    
+    async def set_db_pages(self, user_id:str, notion_db_id: str, pages: list, redis_client: redis.Redis) -> bool:
+        """
+        데이터베이스 페이지 정보를 Redis에 저장
+        """
+        redis_key = f"user:{user_id}:db:{notion_db_id}:pages"
+        result = redis_client.set(redis_key, json.dumps(pages))
+        return result
+    
+    async def set_db_list(self, user_id:str, workspace_id:str, pages:list, redis_client:redis.Redis) -> bool:
+        """
+        사용자의 워크스페이스에 있는 모든 노션 DB들 정보를 Redis에 저장
+        """
+        redis_key = f"user:{user_id}:workspace:{workspace_id}:db_list"
+        result = redis_client.set(redis_key, json.dumps(pages))
+        return result
+    
+    async def get_db_list(self, user_id:str, redis_client:redis.Redis) -> list:
+        """
+        사용자의 워크스페이스에 있는 모든 노션 DB들 정보를 Redis에서 가져옴
+        """
+        redis_key = f"user:{user_id}:*:db_list"
+        cached_result = redis_client.get(redis_key)
+        return cached_result
+    
+    async def set_default_db(self, user_id:str, default_db:str ,redis_client:redis.Redis) -> bool:
+        """
+        사용자의 기본 노션 DB id를 Redis에 저장
+        """
+        redis_key = f"user:{user_id}:default_db"
+        result = redis_client.set(redis_key, default_db)
+        return result
+    
+    async def get_default_db(self, user_id:str, redis_client:redis.Redis) -> str:
+        """
+        사용자의 기본 노션 DB id를 Redis에서 가져옴
+        """
+        redis_key = f"user:{user_id}:default_db"
+        cached_result = redis_client.get(redis_key)
+        return cached_result

@@ -210,28 +210,28 @@ async def insert_learning_page(date: str, title: str, page_id: str, ai_block_id:
         api_logger.error(f"학습 페이지 저장 실패: {str(e)}")
         return False
 
-async def get_learning_page_by_date(date: str, supabase: AsyncClient) -> dict:
+async def get_learning_page_by_date(date: str, user_id: str, supabase: AsyncClient) -> dict:
     """날짜별 학습 페이지 조회"""
     try:
-        res = await supabase.table("learning_pages").select("*").eq("date", date).execute()
+        res = await supabase.table("learning_pages").select("*").eq("date", date).eq("user_id", user_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"학습 페이지 조회 실패: {str(e)}")
         return None
 
-async def update_ai_block_id(page_id: str, new_ai_block_id: str, supabase: AsyncClient) -> bool:
+async def update_ai_block_id(page_id: str, new_ai_block_id: str, user_id: str, supabase: AsyncClient) -> bool:
     """AI 블록 ID 업데이트"""
     try:
-        res = await supabase.table("learning_pages").update({"ai_block_id": new_ai_block_id}).eq("page_id", page_id).execute()
+        res = await supabase.table("learning_pages").update({"ai_block_id": new_ai_block_id}).eq("page_id", page_id).eq("user_id", user_id).execute()
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"AI 블록 ID 업데이트 실패: {str(e)}")
         return False
 
-async def get_ai_block_id_by_page_id(page_id: str, supabase: AsyncClient) -> str:
+async def get_ai_block_id_by_page_id(page_id: str, user_id: str, supabase: AsyncClient) -> str:
     """페이지 ID로 AI 블록 ID 조회"""
     try:
-        res = await supabase.table("learning_pages").select("ai_block_id").eq("page_id", page_id).execute()
+        res = await supabase.table("learning_pages").select("ai_block_id").eq("page_id", page_id).eq("user_id", user_id).execute()
         data = res.data
         if data and "ai_block_id" in data[0]:
             return data[0]["ai_block_id"]

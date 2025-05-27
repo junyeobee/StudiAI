@@ -7,6 +7,7 @@ import httpx
 from app.core.config import settings
 from app.core.exceptions import NotionAPIError
 from app.utils.logger import notion_logger
+from app.utils.notion_utils import markdown_to_notion_blocks
 from app.models.database import (
     DatabaseInfo, 
     DatabaseStatus,
@@ -305,7 +306,6 @@ class NotionService:
         ai_analysis_log_page_id = ai_page_resp["id"]
 
         # 5) 마크다운을 노션 블록으로 변환하여 메인 페이지에 직접 추가
-        from app.utils.notion_utils import markdown_to_notion_blocks
         summary_blocks = markdown_to_notion_blocks(plan.summary)
         
         await self._make_request(
@@ -468,53 +468,17 @@ class NotionService:
     # 요약 페이지 업데이트
     async def update_ai_summary_by_page(self, page_id: str, summary: str) -> None:
         """
-        AI 요약 페이지 ID를 받아서 해당 페이지의 코드 블록 업데이트
+        MarkDown 형식의 요약 내용을 Notion 블록으로 변환하여 학습 페이지에 추가 (항상 페이지 마지막 블록에 쌓임)
         """
-        # 페이지 내 모든 블록 조회
-        resp = await self._make_request(
-            "GET",
+        summary_blocks = markdown_to_notion_blocks(summary)
+        await self._make_request(
+            "PATCH",
             f"blocks/{page_id}/children",
-            params={"page_size": 100}
+            json={"children": summary_blocks}
         )
-        blocks = resp.get("results", [])
-        
-        # 코드 블록 찾기
-        code_block = None
-        for block in blocks:
-            if block.get("type") == "code":
-                code_block = block
-                break
-        
-        if code_block:
-            # 기존 코드 블록 업데이트
-            await self._make_request(
-                "PATCH",
-                f"blocks/{code_block['id']}",
-                json={
-                    "code": {
-                        "rich_text": [{"type": "text", "text": {"content": summary}}],
-                        "language": "markdown"
-                    }
-                }
-            )
-        else:
-            # 코드 블록이 없으면 새로 추가
-            new_block = {
-                "object": "block",
-                "type": "code",
-                "code": {
-                    "rich_text": [{"type": "text", "text": {"content": summary}}],
-                    "language": "markdown"
-                }
-            }
-            await self._make_request(
-                "PATCH",
-                f"blocks/{page_id}/children",
-                json={"children": [new_block]}
-            )
 
     # 학습 페이지 종합 업데이트
-    async def update_learning_page_comprehensive(self, ai_page_id: str, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
+    async def update_learning_page_comprehensive(self, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
         """
         page_id 받아서 각 속성마다 존재한다면 업데이트
         1. 속성 업데이트
@@ -530,8 +494,8 @@ class NotionService:
             await self.update_goal_section(page_id, goal_intro, goals)
 
         # 3. 요약 페이지
-        if ai_page_id is not None and summary is not None:
-            await self.update_ai_summary_by_page(ai_page_id, summary)
+        if summary is not None:
+            await self.update_ai_summary_by_page(page_id, summary)
 
 
     # 페이지 메타 및 블록 조회

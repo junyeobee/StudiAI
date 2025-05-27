@@ -43,12 +43,15 @@ async def get_active_database(user_id: str = Depends(require_user), redis = Depe
         workspace_id = await redis_service.get_user_workspace(user_id, redis)
         if not workspace_id:
             raise HTTPException(status_code=404, detail="기본 워크스페이스를 설정해주세요.")
-        db_info = await get_active_learning_database(supabase, workspace_id)
-        if not db_info:
-            return {"status": "none", "message": "활성화된 데이터베이스가 없습니다."}
+        default_db = await redis_service.get_default_db(user_id, redis)
+        if not default_db:
+            default_db = await get_active_learning_database(supabase, workspace_id)
+            if not default_db:
+                return {"status": "none", "message": "활성화된 데이터베이스가 없습니다."}
+            await redis_service.set_default_db(user_id, default_db, redis)
             
         # Notion API에서 상세 정보 조회
-        notion_db = await notion_service.get_active_database(db_info)
+        notion_db = await notion_service.get_active_database(default_db)
         if not notion_db:
             return {"status": "error", "message": "Notion API에서 데이터베이스 정보를 가져오는데 실패했습니다."}
             
@@ -65,7 +68,10 @@ async def get_available_databases(user_id: str = Depends(require_user), redis = 
         workspace_id = await redis_service.get_user_workspace(user_id, redis)
         if not workspace_id:
             raise HTTPException(status_code=404, detail="기본 워크스페이스를 설정해주세요.")
-        available_dbs = await list_all_learning_databases(supabase, workspace_id)
+        available_dbs = await redis_service.get_db_list(workspace_id, redis)
+        if not available_dbs:
+            available_dbs = await list_all_learning_databases(supabase, workspace_id)
+            await redis_service.set_db_list(workspace_id, available_dbs, redis)
         return {"status": "success", "data": available_dbs}
     except Exception as e:
         api_logger.error(f"학습 가능한 DB 목록 조회 실패: {str(e)}")

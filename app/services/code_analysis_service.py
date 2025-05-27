@@ -2,6 +2,7 @@ from redis import Redis
 from supabase._async.client import AsyncClient
 from typing import Dict, List, Any, Tuple, Optional
 from app.utils.logger import api_logger
+from datetime import date, datetime
 import asyncio
 import re
 import json
@@ -664,6 +665,28 @@ class CodeAnalysisService:
         sys.stdout.flush()
         return result
     
+    def _find_closest_page_to_today(self, pages: list) -> dict | None:
+        """
+        가장 가까운 날짜에 생성된 row에 요약 저장
+        """
+        today = date.today()
+        
+        if not pages:
+            return None
+        
+        # 오늘 날짜와의 차이를 계산하여 가장 가까운 페이지 찾기
+        closest_page = None
+        min_diff = float('inf')
+        
+        for page in pages:
+            page_date = datetime.fromisoformat(page["date"]).date()
+            diff = abs((today - page_date).days)
+            
+            if diff < min_diff:
+                min_diff = diff
+                closest_page = page
+        
+        return closest_page
 
     async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str):
         """Notion AI 요약 블록 업데이트"""
@@ -687,14 +710,21 @@ class CodeAnalysisService:
                 f"**{func_name}()**:
                 {summary}
             """
-            # 1단계: 현재 활성 학습 페이지 찾기
-            
-            ## supabase에서 현재 사용중 db id 조회
-            #get_used_notion_db_id() → 현재 사용중인 DB 조회
-            #해당 DB에서 오늘 날짜 또는 최근 진행중 페이지 찾기
-            #Redis에 캐시해서 반복 조회 방지 (이미 구현됨.)
-
-            # 2단계: 해당 db에서 현재 진행중인 학습 페이지의 ai블록 id를 조회(여기가 실제로 커밋이 저장되는 페이지)
+            curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
+            if not curr_db_id:
+                curr_db_id = await self.supabase.table("learning_databases").select("db_id").eq("user_id", user_id).eq("status", "active").execute()
+                if not curr_db_id:
+                    api_logger.error(f"현재 사용중인 학습 페이지를 찾을 수 없습니다.")
+                    return
+                pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
+                if not pages:
+                    pages = await self.supabase.table("learning_pages").select("*").eq("learning_db_id", curr_db_id).execute()
+                    closest_page = self._find_closest_page_to_today(pages)
+                    if not closest_page:
+                        api_logger.error(f"최근 학습 페이지를 찾을 수 없습니다.")
+                        return
+                    page_id = closest_page["page_id"] # 해당 페이지의 id(노션 페이지 id)
+                    ai_block_id = closest_page["ai_block_id"] # 해당 페이지의 ai블록 id
 
             # 3단계: ai 요약 페이지에 커밋 분석 토글 블록 구조 생성
 
