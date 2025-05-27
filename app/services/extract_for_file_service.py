@@ -52,7 +52,7 @@ class BaseExtractor(ABC):
                     block_comment_start = block_start
                     actual_start = i + 1  # 1-based로 변환
                     continue
-                elif line.startswith(block_comment_start) and in_block_comment:
+                elif block_comment_start and line.startswith(block_comment_start) and in_block_comment:
                     in_block_comment = False
                     actual_start = i + 1  # 1-based로 변환
                     continue
@@ -66,21 +66,21 @@ class BaseExtractor(ABC):
             
             # 데코레이터/어노테이션
             for decorator_pattern in patterns['decorators']:
-                if line.startswith(decorator_pattern):
+                if decorator_pattern and line.startswith(decorator_pattern):
                     should_include = True
                     break
             
             # 라인 주석
             if not should_include:
                 for comment_pattern in patterns['line_comments']:
-                    if line.startswith(comment_pattern):
+                    if comment_pattern and line.startswith(comment_pattern):
                         should_include = True
                         break
             
             # 문서화 주석
             if not should_include:
                 for doc_pattern in patterns['doc_comments']:
-                    if line.startswith(doc_pattern):
+                    if doc_pattern and line.startswith(doc_pattern):
                         should_include = True
                         break
             
@@ -91,7 +91,7 @@ class BaseExtractor(ABC):
             # 중단 조건: 다른 정의들
             should_stop = False
             for keyword in patterns['stop_keywords']:
-                if line.startswith(keyword + ' ') or line.startswith(keyword + '\t'):
+                if keyword and (line.startswith(keyword + ' ') or line.startswith(keyword + '\t')):
                     should_stop = True
                     break
             
