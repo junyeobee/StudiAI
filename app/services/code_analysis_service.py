@@ -879,6 +879,7 @@ class CodeAnalysisService:
                 api_logger.error(f"상세 오류: {traceback.format_exc()}")
                 token = None
                 
+                
         if not token:
             api_logger.error(f"Notion 토큰을 찾을 수 없습니다: {user_id}")
             return
