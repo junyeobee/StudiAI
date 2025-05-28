@@ -304,9 +304,25 @@ class CodeAnalysisService:
                 reference_content
             )
         api_logger.info(f"저장할 타입: {type(summary)} 저장할 결과: {summary}")
+        
+        # Redis 저장 전 디버깅 로그
+        api_logger.info(f"=== Redis 저장 디버깅 ===")
+        api_logger.info(f"Redis 키: {redis_key}")
+        api_logger.info(f"summary 원본 타입: {type(summary)}")
+        api_logger.info(f"summary 원본 값: {repr(summary)}")
+        
         # Redis에 최종 요약 저장 (str을 bytes로 인코딩)
         summary_bytes = summary.encode('utf-8') if isinstance(summary, str) else summary
-        self.redis_client.setex(redis_key, 86400 * 7, summary_bytes)  # 7일 보관
+        api_logger.info(f"변환 후 타입: {type(summary_bytes)}")
+        api_logger.info(f"변환 후 값: {repr(summary_bytes[:100])}...")  # 처음 100바이트만
+        
+        try:
+            self.redis_client.setex(redis_key, 86400 * 7, summary_bytes)  # 7일 보관
+            api_logger.info("Redis 저장 성공!")
+        except Exception as e:
+            api_logger.error(f"Redis 저장 실패: {type(e).__name__}: {e}")
+            api_logger.error(f"실패 시점 summary_bytes 타입: {type(summary_bytes)}")
+            raise
         
         # Notion 업데이트는 파일 단위로 별도 처리
         await self._update_notion_if_needed(func_info, summary, user_id, commit_sha)
@@ -485,8 +501,22 @@ class CodeAnalysisService:
         
         # JSON 데이터를 bytes로 인코딩해서 저장
         request_data_json = json.dumps(request_data)
+        
+        # Redis 저장 전 디버깅 로그
+        api_logger.info(f"=== JSON Redis 저장 디버깅 ===")
+        api_logger.info(f"Redis 키: {request_key}")
+        api_logger.info(f"JSON 원본 타입: {type(request_data_json)}")
+        api_logger.info(f"JSON 원본 값: {repr(request_data_json)}")
+        
         request_data_bytes = request_data_json.encode('utf-8')
-        self.redis_client.setex(request_key, 300, request_data_bytes)
+        api_logger.info(f"변환 후 타입: {type(request_data_bytes)}")
+        
+        try:
+            self.redis_client.setex(request_key, 300, request_data_bytes)
+            api_logger.info("JSON Redis 저장 성공!")
+        except Exception as e:
+            api_logger.error(f"JSON Redis 저장 실패: {type(e).__name__}: {e}")
+            raise
         
         # 5초 폴링 대기
         for _ in range(10):
@@ -692,8 +722,22 @@ class CodeAnalysisService:
         
         # 5. 분석 결과를 Redis에 캐싱 (파일 단위)
         file_cache_key = f"{user_id}:file_analysis:{filename}"
+        
+        # Redis 저장 전 디버깅 로그
+        api_logger.info(f"=== 파일 분석 Redis 저장 디버깅 ===")
+        api_logger.info(f"Redis 키: {file_cache_key}")
+        api_logger.info(f"file_analysis 원본 타입: {type(file_analysis)}")
+        api_logger.info(f"file_analysis 원본 값: {repr(file_analysis[:200])}...")
+        
         file_analysis_bytes = file_analysis.encode('utf-8') if isinstance(file_analysis, str) else file_analysis
-        self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis_bytes)  # 3일 보관
+        api_logger.info(f"변환 후 타입: {type(file_analysis_bytes)}")
+        
+        try:
+            self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis_bytes)  # 3일 보관
+            api_logger.info("파일 분석 Redis 저장 성공!")
+        except Exception as e:
+            api_logger.error(f"파일 분석 Redis 저장 실패: {type(e).__name__}: {e}")
+            raise
         
         return file_analysis
 
@@ -897,8 +941,19 @@ class CodeAnalysisService:
         
         # Redis에 개선 제안 별도 저장 (str을 bytes로 인코딩)
         suggestions_key = f"{user_id}:suggestions:{filename}"
-        suggestions_bytes = suggestions.encode('utf-8') if isinstance(suggestions, str) else suggestions
-        self.redis_client.setex(suggestions_key, 86400 * 7, suggestions_bytes)  # 7일 보관
         
-        api_logger.info(f"파일 '{filename}' 개선 제안 생성 완료")
-        sys.stdout.flush()
+        # Redis 저장 전 디버깅 로그
+        api_logger.info(f"=== Suggestions Redis 저장 디버깅 ===")
+        api_logger.info(f"Redis 키: {suggestions_key}")
+        api_logger.info(f"suggestions 원본 타입: {type(suggestions)}")
+        api_logger.info(f"suggestions 원본 값: {repr(suggestions[:200])}...")
+        
+        suggestions_bytes = suggestions.encode('utf-8') if isinstance(suggestions, str) else suggestions
+        api_logger.info(f"변환 후 타입: {type(suggestions_bytes)}")
+        
+        try:
+            self.redis_client.setex(suggestions_key, 86400 * 7, suggestions_bytes)  # 7일 보관
+            api_logger.info("Suggestions Redis 저장 성공!")
+        except Exception as e:
+            api_logger.error(f"Suggestions Redis 저장 실패: {type(e).__name__}: {e}")
+            raise
