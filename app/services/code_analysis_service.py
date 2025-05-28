@@ -809,7 +809,7 @@ class CodeAnalysisService:
                     .execute()
                 api_logger.info("Supabase 페이지 조회 완료")
                 pages = pages_result.data
-            
+                api_logger.info(f"Supabase에서 페이지 조회 완료: {pages}")
             # 3. 가장 가까운 날짜의 페이지 선택
             closest_page = self._find_closest_page_to_today(pages)
             if not closest_page:
@@ -928,7 +928,7 @@ class CodeAnalysisService:
             if not target_page:
                 api_logger.error(f"타겟 페이지를 찾을 수 없습니다.")
                 return
-                
+            api_logger.info(f"타겟 페이지: {target_page}")
             # 4. 제목3 토글 블록 생성 및 추가
             await self._append_analysis_to_notion(
                 target_page["ai_block_id"], 
