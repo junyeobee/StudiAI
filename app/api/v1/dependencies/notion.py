@@ -8,7 +8,7 @@ from app.api.v1.dependencies.auth import require_user
 from app.utils.logger import api_logger
 import redis
 from app.services.auth_service import get_integration_token
-from app.services.supa import get_default_workspace
+from app.services.supa import get_default_workspace,list_all_learning_databases
 
 redis_service = RedisService()
 
@@ -71,7 +71,7 @@ async def get_notion_db_list(user_id: str = Depends(require_user), supabase: Asy
             return db_list
         
         # Redis에 데이터베이스 목록이 없으면 supabase에서 조회
-        db_list = await NotionService.list_all_learning_databases(supabase, user_id)
+        db_list = await list_all_learning_databases(supabase, user_id)
         if db_list:
             # Redis에 데이터베이스 목록 저장
             await redis_service.set_db_list(user_id, db_list, redis)

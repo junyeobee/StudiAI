@@ -78,7 +78,7 @@ async def create_pages(req: LearningPagesRequest, pages: list = Depends(get_noti
             # 새로운 학습 행 생성
             page_id, ai_block_id = await notion_service.create_learning_page(notion_db_id, plan)
             
-            if page_id not in pages:
+            if notion_db_id not in pages:
                 raise HTTPException(400, "학습 페이지 생성 실패: 유효한 DB가 아닙니다.")
             # 생성된 학습 행에 대한 메타 저장
             saved = await insert_learning_page(

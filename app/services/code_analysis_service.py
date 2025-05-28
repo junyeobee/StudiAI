@@ -12,7 +12,7 @@ import os
 from openai import OpenAI
 from app.services.redis_service import RedisService
 from app.services.extract_for_file_service import extract_functions_by_type
-
+from app.utils.notion_utils import markdown_to_notion_blocks
 # 버퍼링 비활성화
 os.environ["PYTHONUNBUFFERED"] = "1"
 
@@ -289,7 +289,7 @@ class CodeAnalysisService:
         self.redis_client.setex(redis_key, 86400 * 7, summary)  # 7일 보관
         
         # Notion 업데이트는 파일 단위로 별도 처리
-        await self._update_notion_if_needed(func_info, summary, user_id)
+        await self._update_notion_if_needed(func_info, summary, user_id, commit_sha)
         
         api_logger.info(f"함수 '{func_name}' 분석 완료")
         sys.stdout.flush()
@@ -463,7 +463,7 @@ class CodeAnalysisService:
         
         return ""
     
-    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str):
+    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str, commit_sha: str):
         """파일별 종합 분석 및 Notion 업데이트"""
         filename = func_info['filename']
         
@@ -473,7 +473,7 @@ class CodeAnalysisService:
             file_summary = await self._generate_file_level_analysis(filename, user_id)
             
             # 3. Notion AI 요약 블록 업데이트
-            await self._update_notion_ai_block(filename, file_summary, user_id)
+            await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
             
             # 4. 아키텍처 개선 제안 생성
             await self._generate_architecture_suggestions(filename, file_summary, user_id)
@@ -687,70 +687,130 @@ class CodeAnalysisService:
                 closest_page = page
         
         return closest_page
-
-    async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str):
-        """Notion AI 요약 블록 업데이트"""
+    
+    def _collect_function_summaries(self, user_id: str, filename: str) -> Dict[str, str]:
+        """Redis에서 파일의 함수별 분석 결과 수집"""
+        func_keys = self.redis_client.keys(f"{user_id}:func:*:{filename}:*")
+        func_summaries = {}
         
-        try:
-
-            file_cache_key = f"{user_id}:file_analysis:{filename}"
-            func_keys = self.redis_client.keys(f"{user_id}:func:*:{filename}:*")
-            func_summaries = {}
-            for key in func_keys:
-                func_name = key.split(":")[-1]
-                summary = self.redis_client.get(key)
-                if summary:
-                    func_summaries[func_name] = summary
-
-            analysis_summary = f"""###{filename}전체 평가
-            {file_summary}
-
-            ### 함수별 평가
-            for func_name, summary in func_summaries.items():
-                f"**{func_name}()**:
-                {summary}
-            """
-            curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
-            if not curr_db_id:
-                curr_db_id = await self.supabase.table("learning_databases").select("db_id").eq("user_id", user_id).eq("status", "active").execute()
-                if not curr_db_id:
-                    api_logger.error(f"현재 사용중인 학습 페이지를 찾을 수 없습니다.")
-                    return
-                pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
-                if not pages:
-                    pages = await self.supabase.table("learning_pages").select("*").eq("learning_db_id", curr_db_id).execute()
-                    closest_page = self._find_closest_page_to_today(pages)
-                    if not closest_page:
-                        api_logger.error(f"최근 학습 페이지를 찾을 수 없습니다.")
-                        return
-                    page_id = closest_page["page_id"] # 해당 페이지의 id(노션 페이지 id)
-                    ai_block_id = closest_page["ai_block_id"] # 해당 페이지의 ai블록 id
-
-            # 3단계: ai 요약 페이지에 커밋 분석 토글 블록 구조 생성
-
-            ## notion_service.py에 
-            # 4단계: 커밋 분석 토글 블록 구조 생성
-            # [토글] 📅 2025-05-26 커밋 분석 (abc1234)
-            # ├── [토글] 📁 code_analysis_service.py  
-            # │   ├── [토글] 🔍 전체 평가
-            # │   │   └── (마크다운 → 블록 변환된 내용)
-            # │   └── [토글] ⚙️ 함수별 평가
-            # │       └── (함수별 분석 내용)
-            # └── [토글] 📁 tasks.py
-            #     ├── [토글] 🔍 전체 평가  
-            #     └── [토글] ⚙️ 함수별 평가
-
-            # 5단계 : 새 토글 추가(날짜, 커밋 메시지)
-            # analysis_summary를 노션 블록 변환 (MD -> 노션 블록)
-
-            # append_blocks()
-
-            # 7단계: 에러 처리 및 로깅
-
-            # 각 단계별 실패 시 fallback 로직
-            # API 호출 실패 시 Redis에 재시도 큐 저장
-            # 성공/실패 로그 기록
+        for key in func_keys:
+            # key 형식: "{user_id}:func:{commit_sha}:{filename}:{func_name}"
+            func_name = key.split(":")[-1]  # 마지막 부분이 함수명
+            summary = self.redis_client.get(key)
+            if summary:
+                func_summaries[func_name] = summary
+        
+        api_logger.info(f"파일 '{filename}': {len(func_summaries)}개 함수 분석 결과 수집")
+        return func_summaries
+    
+    def _build_analysis_summary(self, filename: str, file_summary: str, func_summaries: Dict[str, str]) -> str:
+        """토글 블록 내부에 들어갈 마크다운 콘텐츠 구성"""
+        
+        analysis_parts = [
+            f"**{filename} 전체**\\n",
+            file_summary,
+            ""
+        ]
+        
+        # 함수별 평가 추가
+        for func_name, summary in func_summaries.items():
+            analysis_parts.extend([
+                f"**{func_name}()**\\n",
+                summary,
+                ""
+            ])
+        
+        return "\n".join(analysis_parts)
+    
+    async def _find_target_page(self, user_id: str) -> Optional[Dict]:
+        """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
+        
+        # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
+        curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
+        if not curr_db_id:
+            db_result = await self.supabase.table("learning_databases")\
+                .select("db_id")\
+                .eq("user_id", user_id)\
+                .eq("status", "active")\
+                .execute()
             
+            if not db_result.data:
+                api_logger.error(f"현재 사용중인 학습 DB를 찾을 수 없습니다.")
+                return None
+            curr_db_id = db_result.data[0]["db_id"]
+        
+        # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순)
+        pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
+        if not pages:
+            pages_result = await self.supabase.table("learning_pages")\
+                .select("*")\
+                .eq("learning_db_id", curr_db_id)\
+                .execute()
+            pages = pages_result.data
+        
+        # 3. 가장 가까운 날짜의 페이지 선택
+        closest_page = self._find_closest_page_to_today(pages)
+        if not closest_page:
+            api_logger.error(f"최근 학습 페이지를 찾을 수 없습니다.")
+            return None
+        
+        return closest_page
+
+    async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str):
+        """분석 결과를 제목3 토글 블록으로 노션에 추가"""
+        
+        # 1. 마크다운을 노션 블록으로 변환
+        content_blocks = markdown_to_notion_blocks(analysis_summary)
+        
+        # 2. 제목3 토글 블록 생성
+        today = date.today().strftime("%Y-%m-%d")
+        heading_toggle_block = {
+            "object": "block",
+            "type": "heading_3",
+            "heading_3": {
+                "rich_text": [
+                    {
+                        "type": "text", 
+                        "text": {"content": f"📅 {today} 요약 ({commit_sha[:8]})"}
+                    }
+                ],
+                "is_toggleable": True,
+                "children": content_blocks  # 변환된 블록들을 children으로 추가
+            }
+        }
+        
+        # 3. 노션 페이지에 추가
+        await self._make_request(
+            "PATCH",
+            f"blocks/{ai_analysis_log_page_id}/children",
+            json={"children": [heading_toggle_block]}
+        )
+
+
+    async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str, commit_sha: str):
+        """Notion AI 요약 블록 업데이트"""
+        try:
+            api_logger.info(f"파일 '{filename}' Notion 업데이트 시작")
+            sys.stdout.flush()
+            
+            # 1. 함수별 분석 결과 수집
+            func_summaries = self._collect_function_summaries(user_id, filename)
+            
+            # 2. 분석 요약 구성
+            analysis_summary = self._build_analysis_summary(filename, file_summary, func_summaries)
+            
+            # 3. 타겟 페이지 찾기
+            target_page = await self._find_target_page(user_id)
+            if not target_page:
+                api_logger.error(f"타겟 페이지를 찾을 수 없습니다.")
+                return
+                
+            # 4. 제목3 토글 블록 생성 및 추가
+            await self._append_analysis_to_notion(
+                target_page["ai_analysis_log_page_id"], 
+                analysis_summary, 
+                commit_sha
+            )
             
             api_logger.info(f"파일 '{filename}' Notion 업데이트 완료")
             sys.stdout.flush()
