@@ -777,7 +777,7 @@ class CodeAnalysisService:
             
             if not curr_db_id:
                 api_logger.info("Redis에 DB ID 없음, Supabase에서 조회")
-                db_result = await self.supabase.table("db_webhooks")\
+                db_result = self.supabase.table("db_webhooks")\
                     .select("learning_db_id")\
                     .eq("created_by", user_id)\
                     .execute()
@@ -795,7 +795,7 @@ class CodeAnalysisService:
             
             if not pages:
                 api_logger.info("Redis에 페이지 없음, Supabase에서 조회")
-                pages_result = await self.supabase.table("learning_pages")\
+                pages_result = self.supabase.table("learning_pages")\
                     .select("*")\
                     .eq("learning_db_id", curr_db_id)\
                     .execute()
