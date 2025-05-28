@@ -304,8 +304,9 @@ class CodeAnalysisService:
                 reference_content
             )
         api_logger.info(f"저장할 타입: {type(summary)} 저장할 결과: {summary}")
-        # Redis에 최종 요약 저장
-        self.redis_client.setex(redis_key, 86400 * 7, summary)  # 7일 보관
+        # Redis에 최종 요약 저장 (str을 bytes로 인코딩)
+        summary_bytes = summary.encode('utf-8') if isinstance(summary, str) else summary
+        self.redis_client.setex(redis_key, 86400 * 7, summary_bytes)  # 7일 보관
         
         # Notion 업데이트는 파일 단위로 별도 처리
         await self._update_notion_if_needed(func_info, summary, user_id, commit_sha)
@@ -480,7 +481,10 @@ class CodeAnalysisService:
         request_key = f"ref_request:{owner}:{repo}:{request_id}"
         response_key = f"ref_response:{owner}:{repo}:{request_id}"
         
-        self.redis_client.setex(request_key, 300, json.dumps(request_data))
+        # JSON 데이터를 bytes로 인코딩해서 저장
+        request_data_json = json.dumps(request_data)
+        request_data_bytes = request_data_json.encode('utf-8')
+        self.redis_client.setex(request_key, 300, request_data_bytes)
         
         # 5초 폴링 대기
         for _ in range(10):
@@ -684,7 +688,8 @@ class CodeAnalysisService:
         
         # 5. 분석 결과를 Redis에 캐싱 (파일 단위)
         file_cache_key = f"{user_id}:file_analysis:{filename}"
-        self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis)  # 3일 보관
+        file_analysis_bytes = file_analysis.encode('utf-8') if isinstance(file_analysis, str) else file_analysis
+        self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis_bytes)  # 3일 보관
         
         return file_analysis
 
@@ -884,9 +889,10 @@ class CodeAnalysisService:
         
         suggestions = await self._call_llm_for_file_analysis(suggestions_prompt)
         
-        # Redis에 개선 제안 별도 저장
+        # Redis에 개선 제안 별도 저장 (str을 bytes로 인코딩)
         suggestions_key = f"{user_id}:suggestions:{filename}"
-        self.redis_client.setex(suggestions_key, 86400 * 7, suggestions)  # 7일 보관
+        suggestions_bytes = suggestions.encode('utf-8') if isinstance(suggestions, str) else suggestions
+        self.redis_client.setex(suggestions_key, 86400 * 7, suggestions_bytes)  # 7일 보관
         
         api_logger.info(f"파일 '{filename}' 개선 제안 생성 완료")
         sys.stdout.flush()
