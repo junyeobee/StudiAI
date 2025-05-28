@@ -265,7 +265,6 @@ class CodeAnalysisService:
         
         previous_summary = self.redis_client.get(redis_key)
         api_logger.info(f"가져온 타입: {type(previous_summary)} 이전 분석 결과: {previous_summary}")
-        return
         # 참조 파일 내용 가져오기
         reference_content = None
         if 'reference_file' in item['metadata']:
@@ -367,6 +366,7 @@ class CodeAnalysisService:
         
         # 이전 요약이 있으면 포함
         if previous_summary:
+            api_logger.info(f"이전 분석 결과 타입: {type(previous_summary)}")
             prompt_parts.append(f"\n이전 분석 결과:\n{previous_summary}")
             if total_chunks > 1:
                 prompt_parts.append("\n위 분석을 바탕으로 다음 코드 청크를 분석하고 통합된 요약을 제공하세요.")
