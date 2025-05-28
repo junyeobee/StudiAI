@@ -182,7 +182,13 @@ class TreeSitterBaseExtractor(BaseExtractor):
     
     def _get_node_text(self, node: Node, content: bytes) -> str:
         """노드의 텍스트 내용 반환"""
-        return content[node.start_byte:node.end_byte].decode('utf8')
+        # content가 str로 전달되는 경우 bytes로 변환
+        if isinstance(content, str):
+            content_bytes = content.encode('utf8')
+        else:
+            content_bytes = content
+        
+        return content_bytes[node.start_byte:node.end_byte].decode('utf8')
     
     def _get_node_line_range(self, node: Node) -> Tuple[int, int]:
         """노드의 라인 범위 반환 (1-based)"""
@@ -190,10 +196,15 @@ class TreeSitterBaseExtractor(BaseExtractor):
     
     def _extract_function_name(self, node: Node, content: bytes) -> str:
         """함수 노드에서 함수명 추출"""
-        # 기본 구현: identifier 노드 찾기
+        # content가 str로 전달되는 경우 bytes로 변환
+        if isinstance(content, str):
+            content_bytes = content.encode('utf8')
+        else:
+            content_bytes = content
+            
         for child in node.children:
             if child.type == 'identifier':
-                return self._get_node_text(child, content)
+                return self._get_node_text(child, content_bytes)
         return "unknown_function"
     
     def _find_functions_with_query(self, root_node: Node, content: bytes) -> List[Dict[str, Any]]:
@@ -477,9 +488,15 @@ class PythonExtractor(TreeSitterBaseExtractor):
     
     def _extract_function_name(self, node: Node, content: bytes) -> str:
         """Python 함수명 추출"""
+        # content가 str로 전달되는 경우 bytes로 변환
+        if isinstance(content, str):
+            content_bytes = content.encode('utf8')
+        else:
+            content_bytes = content
+            
         for child in node.children:
             if child.type == 'identifier':
-                return self._get_node_text(child, content)
+                return self._get_node_text(child, content_bytes)
         return "unknown_function"
     
     def _determine_function_type(self, node: Node) -> str:
@@ -549,10 +566,16 @@ class JavaScriptExtractor(TreeSitterBaseExtractor):
     
     def _extract_function_name(self, node: Node, content: bytes) -> str:
         """JavaScript 함수명 추출"""
+        # content가 str로 전달되는 경우 bytes로 변환
+        if isinstance(content, str):
+            content_bytes = content.encode('utf8')
+        else:
+            content_bytes = content
+            
         # 함수 이름 찾기
         for child in node.children:
             if child.type in ['identifier', 'property_identifier']:
-                return self._get_node_text(child, content)
+                return self._get_node_text(child, content_bytes)
         
         # 화살표 함수나 익명 함수의 경우
         if node.type == 'arrow_function':
@@ -561,7 +584,7 @@ class JavaScriptExtractor(TreeSitterBaseExtractor):
             if parent and parent.type == 'variable_declarator':
                 for child in parent.children:
                     if child.type == 'identifier':
-                        return self._get_node_text(child, content)
+                        return self._get_node_text(child, content_bytes)
             return f"arrow_function_{node.start_point[0]}"
         
         return f"anonymous_{node.start_point[0]}"

@@ -231,13 +231,20 @@ class CodeAnalysisService:
         sys.stdout.flush()
         
         while not self.function_queue.empty():
+            item = None
             try:
                 item = await self.function_queue.get()
                 await self._analyze_function(item)
-                self.function_queue.task_done()
             except Exception as e:
                 api_logger.error(f"함수 분석 처리 오류: {e}")
-                continue
+                # 오류 발생 시에도 실패한 함수 정보 로깅
+                if item:
+                    func_name = item.get('function_info', {}).get('name', 'unknown')
+                    api_logger.error(f"실패한 함수: {func_name}")
+            finally:
+                # 성공/실패 관계없이 task_done() 호출
+                if item:
+                    self.function_queue.task_done()
         
         api_logger.info("모든 함수 분석 완료")
         sys.stdout.flush()
@@ -514,19 +521,31 @@ class CodeAnalysisService:
         pending_functions = set()
         
         # 큐에서 해당 파일의 대기 중인 함수들 확인
-        while not self.function_queue.empty():
-            item = await self.function_queue.get()
-            temp_queue.append(item)
-            
-            if item['function_info']['filename'] == filename:
-                pending_functions.add(item['function_info']['name'])
-        
-        # 큐에 다시 넣기
-        for item in temp_queue:
-            await self.function_queue.put(item)
+        try:
+            while not self.function_queue.empty():
+                item = await self.function_queue.get()
+                temp_queue.append(item)
+                
+                if item and item.get('function_info', {}).get('filename') == filename:
+                    func_name = item.get('function_info', {}).get('name', 'unknown')
+                    pending_functions.add(func_name)
+        except Exception as e:
+            api_logger.error(f"큐 확인 중 오류: {e}")
+        finally:
+            # 큐에 다시 넣기
+            for item in temp_queue:
+                if item:  # None 체크 추가
+                    await self.function_queue.put(item)
         
         # 대기 중인 함수가 없으면 완료
-        return len(pending_functions) == 0
+        is_complete = len(pending_functions) == 0
+        
+        if is_complete:
+            api_logger.info(f"파일 '{filename}' 분석 완료 확인됨")
+        else:
+            api_logger.info(f"파일 '{filename}' 대기 중인 함수: {pending_functions}")
+        
+        return is_complete
 
     async def _generate_file_level_analysis(self, filename: str, user_id: str) -> str:
         """파일 전체 흐름 분석 및 종합 요약 생성"""
