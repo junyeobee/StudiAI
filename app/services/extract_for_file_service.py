@@ -302,7 +302,7 @@ class TreeSitterBaseExtractor(BaseExtractor):
                 return
             
             # 일반 함수 처리 (클래스 외부의 함수들)
-            if self._is_function_node(node) and parent_class_name is None:
+            elif self._is_function_node(node):
                 func_name = self._extract_function_name(node, content)
                 start_line, end_line = self._get_node_line_range(node)
                 func_text = self._get_node_text(node, content)
@@ -318,10 +318,9 @@ class TreeSitterBaseExtractor(BaseExtractor):
                     'type': 'function'
                 })
             
-            # 다른 노드들에 대해 재귀 탐색 (클래스가 아닌 경우에만)
-            if node.type != 'class_definition':
-                for child in node.children:
-                    visit_node(child, parent_class_name)
+            # 다른 노드들에 대해 재귀 탐색
+            for child in node.children:
+                visit_node(child, parent_class_name)
         
         visit_node(root_node)
         return functions

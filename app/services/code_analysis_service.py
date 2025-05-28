@@ -264,7 +264,8 @@ class CodeAnalysisService:
         redis_key = f"{user_id}:func:{commit_sha}:{filename}:{func_name}"
         
         previous_summary = self.redis_client.get(redis_key)
-        
+        api_logger.info(f"가져온 타입: {type(previous_summary)} 이전 분석 결과: {previous_summary}")
+        return
         # 참조 파일 내용 가져오기
         reference_content = None
         if 'reference_file' in item['metadata']:
