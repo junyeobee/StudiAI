@@ -848,7 +848,7 @@ class CodeAnalysisService:
                 
             # 4. 제목3 토글 블록 생성 및 추가
             await self._append_analysis_to_notion(
-                target_page["ai_analysis_log_page_id"], 
+                target_page["ai_block_id"], 
                 analysis_summary, 
                 commit_sha,
                 user_id
