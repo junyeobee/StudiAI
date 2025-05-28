@@ -822,8 +822,35 @@ class CodeAnalysisService:
         token = await redis_service.get_token(user_id, self.redis_client)
 
         if not token:
-            # Redis에 없으면 Supabase에서 조회
-            token = await get_integration_token(user_id=user_id, provider="notion", supabase=self.supabase)
+            # Redis에 없으면 Supabase에서 조회 (동기식 중복 구현)
+            try:
+                integration_result = self.supabase.table("user_integrations")\
+                    .select("*")\
+                    .eq("user_id", user_id)\
+                    .eq("provider", "notion")\
+                    .execute()
+                
+                if integration_result.data:
+                    # 암호화된 토큰 복호화 (auth_service 로직 복사)
+                    import base64
+                    from Crypto.Cipher import AES
+                    from app.core.config import settings
+                    
+                    res = integration_result.data[0]
+                    encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
+                    iv = base64.b64decode(res["token_iv"])
+                    
+                    token_data = base64.b64decode(res["access_token"])
+                    encrypted_token = token_data[:-16]
+                    tag = token_data[-16:]
+                    
+                    cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
+                    token = cipher.decrypt_and_verify(encrypted_token, tag).decode('utf-8')
+                    
+            except Exception as e:
+                api_logger.error(f"토큰 조회 실패: {str(e)}")
+                token = None
+            
             if token:
                 # 조회한 토큰을 Redis에 저장 (1시간 만료)
                 await redis_service.set_token(user_id, token, self.redis_client, expire_seconds=3600)
