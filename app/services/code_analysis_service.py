@@ -781,19 +781,17 @@ class CodeAnalysisService:
     #[app.utils.notion_utils.py#markdown_to_notion_blocks]{}
     async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str):
         """분석 결과를 제목3 토글 블록으로 노션에 추가"""
-        
         # 1. Notion 토큰 조회
         redis_service = RedisService()
         token = await redis_service.get_token(user_id, self.redis_client)
-        
+
         if not token:
             # Redis에 없으면 Supabase에서 조회
             token = await get_integration_token(user_id=user_id, provider="notion", supabase=self.supabase)
-            
             if token:
                 # 조회한 토큰을 Redis에 저장 (1시간 만료)
                 await redis_service.set_token(user_id, token, self.redis_client, expire_seconds=3600)
-        
+                
         if not token:
             api_logger.error(f"Notion 토큰을 찾을 수 없습니다: {user_id}")
             return
