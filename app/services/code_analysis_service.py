@@ -782,7 +782,7 @@ class CodeAnalysisService:
                 return None
             curr_db_id = db_result.data[0]["learning_db_id"]
         
-        # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순)
+        # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순) 
         pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
         if not pages:
             pages_result = self.supabase.table("learning_pages")\
