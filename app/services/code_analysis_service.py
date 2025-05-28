@@ -417,27 +417,25 @@ class CodeAnalysisService:
         
         full_prompt = "\n".join(prompt_parts)
         
-        #현재 내 로컬 API 엔드포인트
-        client = OpenAI(
-            base_url="http://localhost:1234/v1",
-            api_key="lm-studio",
-        )
-        model_name = "meta-llama-3-8b-instruct"
-        # TODO: 실제 LLM API 호출
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
-                {"role": "user", "content": full_prompt}
-            ],
-        )
-        result = response.choices[0].message.content
-        sys.stdout.flush()
-        return result
+        # 파싱 정보 로깅
+        api_logger.info(f"=== 함수 파싱 정보 ===")
+        api_logger.info(f"함수명: {func_info['name']}")
+        api_logger.info(f"타입: {func_info.get('type', 'unknown')}")
+        api_logger.info(f"파일명: {func_info.get('filename', 'unknown')}")
+        api_logger.info(f"라인 범위: {func_info.get('start_line', 0)}-{func_info.get('end_line', 0)}")
+        api_logger.info(f"변경사항 유무: {func_info.get('has_changes', False)}")
+        api_logger.info(f"변경사항 개수: {len(func_info.get('changes', {}))}")
+        if func_info.get('changes'):
+            api_logger.info(f"변경된 라인들: {list(func_info.get('changes', {}).keys())}")
+        api_logger.info(f"청크 정보: {chunk_index + 1}/{total_chunks}")
+        api_logger.info(f"이전 요약 유무: {'있음' if previous_summary else '없음'}")
+        api_logger.info(f"참조 콘텐츠 유무: {'있음' if reference_content else '없음'}")
+        api_logger.info(f"메타데이터: {metadata}")
+        api_logger.info(f"코드 길이: {len(code)}자")
+        api_logger.info("========================")
         
-        print(full_prompt)
-        # 임시 응답
-        return f"[LLM 분석 결과] {func_info['name']} 함수: {func_info.get('type', 'function')} 타입"
+        # 임시 응답 반환 (실제 LLM 호출 대신)
+        return f"[파싱 완료] {func_info['name']} 함수 분석 정보 로깅됨"
     
     async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str, user_id: str) -> str:
         """참조 파일의 함수 요약을 Redis에서 조회"""

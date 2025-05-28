@@ -217,7 +217,7 @@ class TreeSitterBaseExtractor(BaseExtractor):
         
         return "unknown_function"
     
-    def _find_functions_with_query(self, root_node: Node, content: bytes) -> List[Dict[str, Any]]:
+    def _find_functions_with_query(self, root_node: Node, content: bytes, diff_info: Dict[int, Dict], filename: str) -> List[Dict[str, Any]]:
         """쿼리를 사용하여 함수들 찾기"""
         functions = []
         
@@ -245,13 +245,22 @@ class TreeSitterBaseExtractor(BaseExtractor):
                                 
                                 api_logger.debug(f"  메서드 '{method_name}' 발견: {method_start}~{method_end}")
                                 
+                                # 메서드의 변경 사항 찾기
+                                method_changes = {
+                                    line_num: change for line_num, change in diff_info.items()
+                                    if method_start <= line_num <= method_end
+                                }
+                                
                                 class_methods.append({
                                     'name': f"{class_name}.{method_name}",
                                     'node': block_child,
                                     'start_line': method_start,
                                     'end_line': method_end,
-                                    'text': method_text,
-                                    'type': 'method'
+                                    'code': method_text,
+                                    'type': 'method',
+                                    'filename': filename,
+                                    'changes': method_changes,
+                                    'has_changes': bool(method_changes)
                                 })
                                 
                                 # 메서드가 차지하는 라인들 기록
@@ -274,29 +283,47 @@ class TreeSitterBaseExtractor(BaseExtractor):
                     # 빈 줄만 있는 헤더는 제외
                     if any(line.strip() for line in class_header_lines):
                         class_header_text = '\n'.join(class_header_lines)
+                        
+                        # 클래스 헤더의 변경 사항 찾기
+                        header_changes = {
+                            line_num: change for line_num, change in diff_info.items()
+                            if class_start_line <= line_num <= class_end_line and line_num not in method_lines
+                        }
+                        
                         functions.append({
                             'name': f"{class_name}_header",
                             'node': node,
                             'start_line': class_start_line,
                             'end_line': class_end_line,
-                            'text': class_header_text,
-                            'type': 'class_header'
+                            'code': class_header_text,
+                            'type': 'class_header',
+                            'filename': filename,
+                            'changes': header_changes,
+                            'has_changes': bool(header_changes)
                         })
                         
                         api_logger.debug(f"  클래스 '{class_name}' 헤더 추가: {len(class_header_lines)}줄")
                 else:
                     # 메서드가 없는 클래스는 전체를 하나로 처리
                     class_text = self._get_node_text(node, content)
+                    
+                    # 전체 클래스의 변경 사항 찾기
+                    class_changes = {
+                        line_num: change for line_num, change in diff_info.items()
+                        if class_start_line <= line_num <= class_end_line
+                    }
+                    
                     functions.append({
                         'name': class_name,
                         'node': node,
                         'start_line': class_start_line,
                         'end_line': class_end_line,
-                        'text': class_text,
-                        'type': 'class'
+                        'code': class_text,
+                        'type': 'class',
+                        'filename': filename,
+                        'changes': class_changes,
+                        'has_changes': bool(class_changes)
                     })
-                    
-                    api_logger.debug(f"  클래스 '{class_name}' 전체 추가 (메서드 없음)")
                 
                 # 클래스 내부는 이미 처리했으므로 더 이상 재귀하지 않음
                 return
@@ -309,13 +336,22 @@ class TreeSitterBaseExtractor(BaseExtractor):
                 
                 api_logger.debug(f"전역 함수 '{func_name}' 발견: {start_line}~{end_line}")
                 
+                # 함수의 변경 사항 찾기
+                func_changes = {
+                    line_num: change for line_num, change in diff_info.items()
+                    if start_line <= line_num <= end_line
+                }
+                
                 functions.append({
                     'name': func_name,
                     'node': node,
                     'start_line': start_line,
                     'end_line': end_line,
-                    'text': func_text,
-                    'type': 'function'
+                    'code': func_text,
+                    'type': 'function',
+                    'filename': filename,
+                    'changes': func_changes,
+                    'has_changes': bool(func_changes)
                 })
             
             # 다른 노드들에 대해 재귀 탐색
@@ -345,7 +381,7 @@ class TreeSitterBaseExtractor(BaseExtractor):
         lines = content.splitlines()
         
         # 함수들 찾기
-        found_functions = self._find_functions_with_query(root_node, content_bytes)
+        found_functions = self._find_functions_with_query(root_node, content_bytes, diff_info, filename)
         
         functions = []
         function_lines = set()
@@ -354,7 +390,7 @@ class TreeSitterBaseExtractor(BaseExtractor):
             func_start = func_info['start_line']
             func_end = func_info['end_line']
             func_name = func_info['name']
-            node_text = func_info['text']
+            node_text = func_info['code']
             
             # 클래스 헤더는 이미 처리된 텍스트 사용
             if func_info.get('type') in ['class_header', 'class']:
