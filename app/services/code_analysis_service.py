@@ -772,16 +772,15 @@ class CodeAnalysisService:
         # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
         curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
         if not curr_db_id:
-            db_result = await self.supabase.table("learning_databases")\
-                .select("db_id")\
+            db_result = await self.supabase.table("db_webhooks")\
+                .select("learning_db_id")\
                 .eq("user_id", user_id)\
-                .eq("status", "active")\
                 .execute()
             
             if not db_result.data:
                 api_logger.error(f"현재 사용중인 학습 DB를 찾을 수 없습니다.")
                 return None
-            curr_db_id = db_result.data[0]["db_id"]
+            curr_db_id = db_result.data[0]["learning_db_id"]
         
         # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순)
         pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
