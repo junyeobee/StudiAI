@@ -769,35 +769,50 @@ class CodeAnalysisService:
     
     async def _find_target_page(self, user_id: str) -> Optional[Dict]:
         """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
-        # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
-        curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
-        if not curr_db_id:
-            db_result = await self.supabase.table("db_webhooks")\
-                .select("learning_db_id")\
-                .eq("created_by", user_id)\
-                .execute()
+        try:
+            api_logger.info(f"_find_target_page 시작: {user_id}")
+            # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
+            curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
+            api_logger.info(f"Redis에서 DB ID 조회 완료: {curr_db_id}")
             
-            if not db_result.data:
-                api_logger.error(f"현재 사용중인 학습 DB를 찾을 수 없습니다.")
+            if not curr_db_id:
+                api_logger.info("Redis에 DB ID 없음, Supabase에서 조회")
+                db_result = await self.supabase.table("db_webhooks")\
+                    .select("learning_db_id")\
+                    .eq("created_by", user_id)\
+                    .execute()
+                api_logger.info("Supabase DB 조회 완료")
+                
+                if not db_result.data:
+                    api_logger.error(f"현재 사용중인 학습 DB를 찾을 수 없습니다.")
+                    return None
+                curr_db_id = db_result.data[0]["learning_db_id"]
+            
+            api_logger.info(f"최종 DB ID: {curr_db_id}")
+            # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순) 
+            pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
+            api_logger.info(f"Redis에서 페이지 조회 완료: {len(pages) if pages else 0}개")
+            
+            if not pages:
+                api_logger.info("Redis에 페이지 없음, Supabase에서 조회")
+                pages_result = await self.supabase.table("learning_pages")\
+                    .select("*")\
+                    .eq("learning_db_id", curr_db_id)\
+                    .execute()
+                api_logger.info("Supabase 페이지 조회 완료")
+                pages = pages_result.data
+            
+            # 3. 가장 가까운 날짜의 페이지 선택
+            closest_page = self._find_closest_page_to_today(pages)
+            if not closest_page:
+                api_logger.error(f"최근 학습 페이지를 찾을 수 없습니다.")
                 return None
-            curr_db_id = db_result.data[0]["learning_db_id"]
-        
-        # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순) 
-        pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
-        if not pages:
-            pages_result = await self.supabase.table("learning_pages")\
-                .select("*")\
-                .eq("learning_db_id", curr_db_id)\
-                .execute()
-            pages = pages_result.data
-        
-        # 3. 가장 가까운 날짜의 페이지 선택
-        closest_page = self._find_closest_page_to_today(pages)
-        if not closest_page:
-            api_logger.error(f"최근 학습 페이지를 찾을 수 없습니다.")
-            return None
-        
-        return closest_page
+            
+            api_logger.info("_find_target_page 완료")
+            return closest_page
+        except Exception as e:
+            api_logger.error(f"_find_target_page 오류: {str(e)}")
+            raise e
 
     #[app.utils.notion_utils.py#markdown_to_notion_blocks]{}
     async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str):
