@@ -209,11 +209,11 @@ class RedisService:
         result = redis_client.set(redis_key, json.dumps(pages))
         return result
     
-    async def get_db_list(self, user_id:str, redis_client:redis.Redis) -> list:
+    async def get_db_list(self, user_id:str, workspace_id:str, redis_client:redis.Redis) -> list:
         """
         사용자의 워크스페이스에 있는 모든 노션 DB들 정보를 Redis에서 가져옴
         """
-        redis_key = f"user:{user_id}:*:db_list"
+        redis_key = f"user:{user_id}:workspace:{workspace_id}:db_list"
         cached_result = redis_client.get(redis_key)
         return cached_result
     

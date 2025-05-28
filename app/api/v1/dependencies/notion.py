@@ -62,19 +62,19 @@ async def get_notion_workspace(user_id: str = Depends(require_user), supabase: A
         api_logger.error(f"노션 워크스페이스 조회 실패: {str(e)}")
         return "조회 실패"
 
-async def get_notion_db_list(user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), redis: redis.Redis = Depends(get_redis)) -> list:
+async def get_notion_db_list(user_id: str = Depends(require_user), workspace_id: str = Depends(get_notion_workspace), supabase: AsyncClient = Depends(get_supabase), redis: redis.Redis = Depends(get_redis)) -> list:
     """노션 데이터베이스 목록 조회"""
     try:
         # Redis에 저장된 데이터베이스 목록 조회
-        db_list = await redis_service.get_db_list(user_id, redis)
+        db_list = await redis_service.get_db_list(user_id, workspace_id, redis)
         if db_list:
             return db_list
         
         # Redis에 데이터베이스 목록이 없으면 supabase에서 조회
-        db_list = await list_all_learning_databases(supabase, user_id)
+        db_list = await list_all_learning_databases(supabase, workspace_id)
         if db_list:
             # Redis에 데이터베이스 목록 저장
-            await redis_service.set_db_list(user_id, db_list, redis)
+            await redis_service.set_db_list(user_id, workspace_id, db_list, redis)
         return db_list
     except Exception as e:
         api_logger.error(f"노션 데이터베이스 목록 조회 실패: {str(e)}")
