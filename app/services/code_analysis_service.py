@@ -375,7 +375,7 @@ class CodeAnalysisService:
         
         # 참조 파일 내용 포함
         if reference_content:
-            prompt_parts.append(f"\n참조 함수 코드:\n{reference_content}")
+            prompt_parts.append(f"\n참조 함수 코드(타입):\n{reference_content}")
         
         # 메타데이터 기반 커스텀 프롬프트
         if 'custom_prompt' in metadata:
