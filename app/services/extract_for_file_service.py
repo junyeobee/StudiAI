@@ -159,7 +159,7 @@ class TreeSitterBaseExtractor(BaseExtractor):
         self.parser = Parser()
         self.language = self._get_language()
         if self.language:
-            self.parser.language(self.language)
+            self.parser.language = self.language
     
     @abstractmethod
     def _get_language(self) -> Optional[Language]:
