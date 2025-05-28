@@ -487,7 +487,7 @@ class CodeAnalysisService:
         # 1. 파일의 모든 함수 분석이 완료되었는지 확인
         if await self._is_file_analysis_complete(filename, user_id):
             # 2. 파일별 종합 분석 수행
-            file_summary = await self._generate_file_level_analysis(filename, user_id)
+            file_summary = await self._generate_file_level_analysis(filename, user_id, commit_sha)
             
             # 3. Notion AI 요약 블록 업데이트
             await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
@@ -533,10 +533,10 @@ class CodeAnalysisService:
         
         return is_complete
 
-    async def _generate_file_level_analysis(self, filename: str, user_id: str) -> str:
+    async def _generate_file_level_analysis(self, filename: str, user_id: str, commit_sha: str) -> str:
         """파일 전체 흐름 분석 및 종합 요약 생성"""
         
-        # 1. 파일의 모든 함수 요약 수집
+        # 1. 파일의 모든 함수 요약 수집 (전체 구조 파악을 위해 모든 커밋 포함)
         pattern = f"{user_id}:func:*:{filename}:*"
         function_keys = self.redis_client.keys(pattern)
         
@@ -730,9 +730,9 @@ class CodeAnalysisService:
         
         return closest_page
     
-    def _collect_function_summaries(self, user_id: str, filename: str) -> Dict[str, str]:
+    def _collect_function_summaries(self, user_id: str, filename: str, commit_sha: str) -> Dict[str, str]:
         """Redis에서 파일의 함수별 분석 결과 수집"""
-        func_keys = self.redis_client.keys(f"{user_id}:func:*:{filename}:*")
+        func_keys = self.redis_client.keys(f"{user_id}:func:{commit_sha}:{filename}:*")
         func_summaries = {}
         
         for key in func_keys:
@@ -746,7 +746,7 @@ class CodeAnalysisService:
                 summary = summary_raw.decode('utf-8') if isinstance(summary_raw, bytes) else summary_raw
                 func_summaries[func_name] = summary
         
-        api_logger.info(f"파일 '{filename}': {len(func_summaries)}개 함수 분석 결과 수집")
+        api_logger.info(f"파일 '{filename}': {len(func_summaries)}개 함수 분석 결과 수집 (커밋: {commit_sha[:8]})")
         return func_summaries
     
     def _build_analysis_summary(self, filename: str, file_summary: str, func_summaries: Dict[str, str]) -> str:
@@ -764,7 +764,7 @@ class CodeAnalysisService:
                 summary,
                 ""
             ])
-        
+        api_logger.info(f"분석 요약 구성 완료: {analysis_parts}")
         return "\n".join(analysis_parts)
     
     async def _find_target_page(self, user_id: str) -> Optional[Dict]:
@@ -919,7 +919,7 @@ class CodeAnalysisService:
             sys.stdout.flush()
             
             # 1. 함수별 분석 결과 수집
-            func_summaries = self._collect_function_summaries(user_id, filename)
+            func_summaries = self._collect_function_summaries(user_id, filename, commit_sha)
             
             # 2. 분석 요약 구성
             analysis_summary = self._build_analysis_summary(filename, file_summary, func_summaries)
