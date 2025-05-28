@@ -414,8 +414,33 @@ class CodeAnalysisService:
         
         full_prompt = "\n".join(prompt_parts)
         
-        # 임시 응답 반환 (실제 LLM 호출 대신)
-        return f"[파싱 완료] {func_info['name']} 함수 분석 정보 로깅됨"
+        # 로컬 LLM 호출
+        try:
+            api_logger.info(f"함수 '{func_info['name']}' LLM 분석 시작")
+            
+            # OpenAI 클라이언트 설정 (로컬 LLM 서버)
+            client = OpenAI(
+                base_url="http://127.0.0.1:1234/v1",
+                api_key="lm-studio"
+            )
+            
+            response = client.chat.completions.create(
+                model="meta-llama-3-8b-instruct",
+                messages=[
+                    {"role": "system", "content": "당신은 코드 분석 전문가입니다. 주어진 함수를 분석하여 명확하고 유용한 정보를 제공하세요."},
+                    {"role": "user", "content": full_prompt}
+                ]
+            )
+            
+            result = response.choices[0].message.content
+            api_logger.info(f"함수 '{func_info['name']}' LLM 분석 완료")
+            sys.stdout.flush()
+            return result
+            
+        except Exception as e:
+            api_logger.error(f"LLM 호출 실패: {str(e)}")
+            # 실패 시 간단한 응답 반환
+            return f"**기능 요약**: {func_info['name']} 함수\n**분석 상태**: LLM 분석 실패 - {str(e)}"
     
     async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str, user_id: str) -> str:
         """참조 파일의 함수 요약을 Redis에서 조회"""
@@ -682,30 +707,40 @@ class CodeAnalysisService:
 
     async def _call_llm_for_file_analysis(self, prompt: str) -> str:
         """파일 전체 분석을 위한 LLM 호출"""
-        # 임시로 LLM 호출 비활성화 - 디버깅용
-        api_logger.info("파일 분석 LLM 호출 완료 (더미 응답)")
-        # 더미 응답 반환 (실제 LLM 호출 대신)
-        dummy_response = f"""
+        try:
+            api_logger.info("파일 전체 분석 LLM 호출 시작")
+            
+            # OpenAI 클라이언트 설정 (로컬 LLM 서버)
+            client = OpenAI(
+                base_url="http://127.0.0.1:1234/v1",
+                api_key="lm-studio"
+            )
+            
+            response = client.chat.completions.create(
+                model="meta-llama-3-8b-instruct",
+                messages=[
+                    {"role": "system", "content": "당신은 소프트웨어 아키텍처 전문가입니다. 파일 전체의 구조와 흐름을 분석하여 개선 방안을 제시하세요."},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            result = response.choices[0].message.content
+            api_logger.info("파일 전체 분석 LLM 호출 완료")
+            return result
+            
+        except Exception as e:
+            api_logger.error(f"파일 분석 LLM 호출 실패: {str(e)}")
+            # 실패 시 기본 응답 반환
+            return f"""
 ## 🏛️ 아키텍처 분석
-파일 전체 구조 분석 완료
+LLM 분석 실패로 인한 기본 응답
 
-## 🔄 데이터 흐름 분석  
-함수간 호출 관계 분석 완료
+## 📝 분석 상태
+LLM 호출 오류: {str(e)}
 
-## 🚀 성능 및 확장성
-성능 최적화 포인트 분석 완료
-
-## 🛡️ 안정성 및 에러 처리
-예외 처리 분석 완료
-
-## 📈 코드 품질 평가
-코드 품질 평가 완료
-
-## 🎯 구체적 개선 제안
-- 우선순위별 개선사항 분석 완료
+## 🔧 해결 방안
+로컬 LLM 서버 상태를 확인하세요.
 """
-        
-        return dummy_response
     
     def _find_closest_page_to_today(self, pages: list) -> dict | None:
         """
@@ -752,7 +787,7 @@ class CodeAnalysisService:
     def _build_analysis_summary(self, filename: str, file_summary: str, func_summaries: Dict[str, str]) -> str:
         """토글 블록 내부에 들어갈 마크다운 콘텐츠 구성"""
         analysis_parts = [
-            f"**{filename} 전체**\\n",
+            f"## {filename} 전체\n",
             file_summary,
             ""
         ]
@@ -760,13 +795,14 @@ class CodeAnalysisService:
         # 함수별 평가 추가
         for func_name, summary in func_summaries.items():
             analysis_parts.extend([
-                f"**{func_name}()**\\n",
+                f"### {func_name}()\n",
                 summary,
                 ""
             ])
-            
-        api_logger.info(f"분석 요약 구성 완료: {analysis_parts}")
-        return "\n".join(analysis_parts)
+
+        result = "\n".join(analysis_parts)
+        api_logger.info(f"분석 요약 구성 완료: {len(analysis_parts)}개 파트")
+        return result
     
     async def _find_target_page(self, user_id: str) -> Optional[Dict]:
         """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
@@ -889,21 +925,6 @@ class CodeAnalysisService:
         
         # 2. NotionService로 요청 전송 전에 페이지 구조 확인
         notion_service = NotionService(token=token)
-        
-        # 디버깅: 현재 페이지 블록 구조 확인
-        try:
-            api_logger.info(f"페이지 블록 구조 확인 시작: {ai_analysis_log_page_id}")
-            page_content = await notion_service.get_page_content(ai_analysis_log_page_id)
-            blocks = page_content.get("blocks", [])
-            api_logger.info(f"현재 페이지 블록 개수: {len(blocks)}")
-            
-            for i, block in enumerate(blocks[:5]):  # 처음 5개 블록만 로깅
-                block_type = block.get("type", "unknown")
-                block_id = block.get("id", "no_id")
-                api_logger.info(f"블록 {i}: type={block_type}, id={block_id}")
-                
-        except Exception as e:
-            api_logger.error(f"페이지 구조 확인 실패: {str(e)}")
         
         await notion_service.append_code_analysis_to_page(
             ai_analysis_log_page_id, 
