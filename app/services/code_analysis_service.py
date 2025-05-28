@@ -743,23 +743,49 @@ class CodeAnalysisService:
 
     async def _call_llm_for_file_analysis(self, prompt: str) -> str:
         """파일 전체 분석을 위한 LLM 호출"""
-        #현재 내 로컬 API 엔드포인트
-        client = OpenAI(
-            base_url="http://localhost:1234/v1",
-            api_key="lm-studio",
-        )
-        model_name = "meta-llama-3-8b-instruct"
-        # TODO: 실제 LLM API 호출
-        response = client.chat.completions.create(
-            model=model_name,
-            messages=[
-                {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
-                {"role": "user", "content": prompt}
-            ],
-        )
-        result = response.choices[0].message.content
-        sys.stdout.flush()
-        return result
+        # 임시로 LLM 호출 비활성화 - 디버깅용
+        api_logger.info("파일 분석 LLM 호출 시작")
+        
+        # 더미 응답 반환 (실제 LLM 호출 대신)
+        dummy_response = f"""
+## 🏛️ 아키텍처 분석
+파일 전체 구조 분석 완료
+
+## 🔄 데이터 흐름 분석  
+함수간 호출 관계 분석 완료
+
+## 🚀 성능 및 확장성
+성능 최적화 포인트 분석 완료
+
+## 🛡️ 안정성 및 에러 처리
+예외 처리 분석 완료
+
+## 📈 코드 품질 평가
+코드 품질 평가 완료
+
+## 🎯 구체적 개선 제안
+- 우선순위별 개선사항 분석 완료
+"""
+        
+        api_logger.info("파일 분석 LLM 호출 완료 (더미 응답)")
+        return dummy_response
+        
+        # 기존 OpenAI 호출 코드 (임시 비활성화)
+        # client = OpenAI(
+        #     base_url="http://localhost:1234/v1",
+        #     api_key="lm-studio",
+        # )
+        # model_name = "meta-llama-3-8b-instruct"
+        # response = client.chat.completions.create(
+        #     model=model_name,
+        #     messages=[
+        #         {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
+        #         {"role": "user", "content": prompt}
+        #     ],
+        # )
+        # result = response.choices[0].message.content
+        # sys.stdout.flush()
+        # return result
     
     def _find_closest_page_to_today(self, pages: list) -> dict | None:
         """
