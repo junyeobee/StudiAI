@@ -680,6 +680,7 @@ class CodeAnalysisService:
 
     **응답 형식:** 마크다운으로 구조화하여 Notion에서 읽기 좋게 작성
     """
+        api_logger.info(f"파일 분석 프롬프트: {analysis_prompt}")
         # 4. LLM 호출하여 종합 분석
         file_analysis = await self._call_llm_for_file_analysis(analysis_prompt)
         
