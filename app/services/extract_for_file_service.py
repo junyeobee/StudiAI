@@ -202,9 +202,19 @@ class TreeSitterBaseExtractor(BaseExtractor):
         else:
             content_bytes = content
             
+        # decorated_definition의 경우 내부 함수 정의에서 이름 찾기
+        if node.type == 'decorated_definition':
+            for child in node.children:
+                if child.type in ['function_definition', 'async_function_definition']:
+                    for grandchild in child.children:
+                        if grandchild.type == 'identifier':
+                            return self._get_node_text(grandchild, content_bytes)
+        
+        # 일반 함수의 경우
         for child in node.children:
             if child.type == 'identifier':
                 return self._get_node_text(child, content_bytes)
+        
         return "unknown_function"
     
     def _find_functions_with_query(self, root_node: Node, content: bytes) -> List[Dict[str, Any]]:
@@ -212,47 +222,47 @@ class TreeSitterBaseExtractor(BaseExtractor):
         functions = []
         
         # 간단한 재귀 탐색으로 함수 노드들 찾기
-        def visit_node(node: Node):
+        def visit_node(node: Node, parent_class_name: str = None):
             # 클래스 정의 처리
             if node.type == 'class_definition':
                 class_name = self._extract_function_name(node, content)
                 class_start_line, class_end_line = self._get_node_line_range(node)
                 
-                # 클래스 내부 메서드들 찾기
+                api_logger.debug(f"클래스 '{class_name}' 처리 시작: {class_start_line}~{class_end_line}")
+                
+                # 클래스 내부의 직접적인 메서드들만 찾기
                 class_methods = []
                 method_lines = set()
                 
-                def find_methods_in_class(class_node):
-                    for child in class_node.children:
-                        if self._is_function_node(child):
-                            method_name = self._extract_function_name(child, content)
-                            method_start, method_end = self._get_node_line_range(child)
-                            method_text = self._get_node_text(child, content)
-                            
-                            class_methods.append({
-                                'name': f"{class_name}.{method_name}",
-                                'node': child,
-                                'start_line': method_start,
-                                'end_line': method_end,
-                                'text': method_text,
-                                'type': 'method'  # 명시적 타입 지정
-                            })
-                            
-                            # 메서드가 차지하는 라인들 기록
-                            method_lines.update(range(method_start, method_end + 1))
-                        
-                        # 중첩 클래스나 다른 구조체도 재귀 탐색
-                        for grandchild in child.children:
-                            find_methods_in_class(grandchild)
+                # 클래스의 직접적인 자식 노드들만 확인
+                for child in node.children:
+                    if child.type == 'block':  # 클래스 본문 블록
+                        for block_child in child.children:
+                            if self._is_function_node(block_child):
+                                method_name = self._extract_function_name(block_child, content)
+                                method_start, method_end = self._get_node_line_range(block_child)
+                                method_text = self._get_node_text(block_child, content)
+                                
+                                api_logger.debug(f"  메서드 '{method_name}' 발견: {method_start}~{method_end}")
+                                
+                                class_methods.append({
+                                    'name': f"{class_name}.{method_name}",
+                                    'node': block_child,
+                                    'start_line': method_start,
+                                    'end_line': method_end,
+                                    'text': method_text,
+                                    'type': 'method'
+                                })
+                                
+                                # 메서드가 차지하는 라인들 기록
+                                method_lines.update(range(method_start, method_end + 1))
                 
-                find_methods_in_class(node)
-                
-                # 클래스 헤더 + 상수/속성 부분만 추출
+                # 클래스 헤더 부분 추출 (메서드 제외)
                 if class_methods:
                     # 메서드들을 함수 리스트에 추가
                     functions.extend(class_methods)
                     
-                    # 클래스 상수/속성 부분 추출 (메서드 제외)
+                    # 클래스 상수/속성 부분만 추출
                     lines = content.decode('utf8').splitlines()
                     class_header_lines = []
                     
@@ -261,7 +271,8 @@ class TreeSitterBaseExtractor(BaseExtractor):
                         if line_num not in method_lines:
                             class_header_lines.append(lines[i] if i < len(lines) else "")
                     
-                    if class_header_lines:
+                    # 빈 줄만 있는 헤더는 제외
+                    if any(line.strip() for line in class_header_lines):
                         class_header_text = '\n'.join(class_header_lines)
                         functions.append({
                             'name': f"{class_name}_header",
@@ -269,8 +280,10 @@ class TreeSitterBaseExtractor(BaseExtractor):
                             'start_line': class_start_line,
                             'end_line': class_end_line,
                             'text': class_header_text,
-                            'type': 'class_header'  # 명시적 타입 지정
+                            'type': 'class_header'
                         })
+                        
+                        api_logger.debug(f"  클래스 '{class_name}' 헤더 추가: {len(class_header_lines)}줄")
                 else:
                     # 메서드가 없는 클래스는 전체를 하나로 처리
                     class_text = self._get_node_text(node, content)
@@ -280,28 +293,35 @@ class TreeSitterBaseExtractor(BaseExtractor):
                         'start_line': class_start_line,
                         'end_line': class_end_line,
                         'text': class_text,
-                        'type': 'class'  # 명시적 타입 지정
+                        'type': 'class'
                     })
+                    
+                    api_logger.debug(f"  클래스 '{class_name}' 전체 추가 (메서드 없음)")
                 
-                return  # 클래스 내부는 이미 처리했으므로 더 이상 재귀하지 않음
+                # 클래스 내부는 이미 처리했으므로 더 이상 재귀하지 않음
+                return
             
-            if self._is_function_node(node):
+            # 일반 함수 처리 (클래스 외부의 함수들)
+            if self._is_function_node(node) and parent_class_name is None:
                 func_name = self._extract_function_name(node, content)
                 start_line, end_line = self._get_node_line_range(node)
-                
-                # 함수 전체 텍스트 추출
                 func_text = self._get_node_text(node, content)
+                
+                api_logger.debug(f"전역 함수 '{func_name}' 발견: {start_line}~{end_line}")
                 
                 functions.append({
                     'name': func_name,
                     'node': node,
                     'start_line': start_line,
                     'end_line': end_line,
-                    'text': func_text
+                    'text': func_text,
+                    'type': 'function'
                 })
             
-            for child in node.children:
-                visit_node(child)
+            # 다른 노드들에 대해 재귀 탐색 (클래스가 아닌 경우에만)
+            if node.type != 'class_definition':
+                for child in node.children:
+                    visit_node(child, parent_class_name)
         
         visit_node(root_node)
         return functions
@@ -335,20 +355,67 @@ class TreeSitterBaseExtractor(BaseExtractor):
             func_start = func_info['start_line']
             func_end = func_info['end_line']
             func_name = func_info['name']
+            node_text = func_info['text']
             
-            # 컨텍스트 포함해서 추출 (클래스 헤더는 이미 추출되어 있으므로 건너뜀)
+            # 클래스 헤더는 이미 처리된 텍스트 사용
             if func_info.get('type') in ['class_header', 'class']:
-                func_code = func_info['text']
+                func_code = node_text
                 actual_start = func_start
+                actual_end = func_end
             else:
-                func_code, actual_start = self._extract_function_with_context(
-                    lines, func_start, func_end, func_name
-                )
+                # tree-sitter 텍스트를 원본에서 찾아서 실제 라인 번호 결정
+                func_code = node_text
+                
+                # 함수의 첫 번째 라인으로 실제 위치 찾기
+                node_lines = node_text.split('\n')
+                if node_lines:
+                    # 함수 정의 라인 찾기 (def, async def, @property 등)
+                    def_line = None
+                    for line in node_lines:
+                        stripped = line.strip()
+                        if (stripped.startswith('def ') or 
+                            stripped.startswith('async def ') or
+                            stripped.startswith('@')):
+                            def_line = stripped
+                            break
+                    
+                    if def_line:
+                        # 원본 코드에서 해당 라인 찾기
+                        actual_start = None
+                        for i, line in enumerate(lines):
+                            if line.strip() == def_line:
+                                actual_start = i + 1
+                                break
+                        
+                        if actual_start:
+                            actual_end = actual_start + len(node_lines) - 1
+                            
+                            # 컨텍스트 포함해서 추출 (데코레이터, 주석 등)
+                            func_code_with_context, context_start = self._extract_function_with_context(
+                                lines, actual_start, actual_end, func_name
+                            )
+                            
+                            # 컨텍스트가 있으면 사용, 없으면 원본 사용
+                            if context_start < actual_start:
+                                func_code = func_code_with_context
+                                actual_start = context_start
+                        else:
+                            # 찾지 못한 경우 tree-sitter 값 사용
+                            actual_start = func_start
+                            actual_end = func_end
+                    else:
+                        # def 라인을 찾지 못한 경우 tree-sitter 값 사용
+                        actual_start = func_start
+                        actual_end = func_end
+                else:
+                    # 빈 함수인 경우
+                    actual_start = func_start
+                    actual_end = func_end
             
             # 변경 사항 찾기
             func_changes = {
                 line_num: change for line_num, change in diff_info.items()
-                if actual_start <= line_num <= func_end
+                if actual_start <= line_num <= actual_end
             }
             
             # 타입이 이미 지정된 경우 그대로 사용, 아니면 결정
@@ -359,13 +426,13 @@ class TreeSitterBaseExtractor(BaseExtractor):
                 'type': func_type,
                 'code': func_code,
                 'start_line': actual_start,
-                'end_line': func_end,
+                'end_line': actual_end,
                 'filename': filename,
                 'changes': func_changes,
                 'has_changes': bool(func_changes)
             })
             
-            function_lines.update(range(actual_start, func_end + 1))
+            function_lines.update(range(actual_start, actual_end + 1))
         
         # 전역 코드 처리
         self._add_global_code(functions, lines, diff_info, function_lines, filename)
@@ -564,20 +631,19 @@ class PythonExtractor(TreeSitterBaseExtractor):
         """Python 함수/메서드 노드 확인 (클래스 제외)"""
         # 클래스는 제외하고 순수 함수/메서드만 처리
         function_types = ['function_definition', 'async_function_definition']
-        return node.type in function_types
-    
-    def _extract_function_name(self, node: Node, content: bytes) -> str:
-        """Python 함수명 추출"""
-        # content가 str로 전달되는 경우 bytes로 변환
-        if isinstance(content, str):
-            content_bytes = content.encode('utf8')
-        else:
-            content_bytes = content
-            
-        for child in node.children:
-            if child.type == 'identifier':
-                return self._get_node_text(child, content_bytes)
-        return "unknown_function"
+        
+        # 직접적인 함수 정의
+        if node.type in function_types:
+            return True
+        
+        # 데코레이터가 있는 함수 (@property 등)
+        if node.type == 'decorated_definition':
+            # decorated_definition의 자식 중에 함수 정의가 있는지 확인
+            for child in node.children:
+                if child.type in function_types:
+                    return True
+        
+        return False
     
     def _determine_function_type(self, node: Node) -> str:
         """Python 노드 타입 결정"""
