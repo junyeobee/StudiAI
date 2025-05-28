@@ -724,7 +724,6 @@ class CodeAnalysisService:
     
     async def _find_target_page(self, user_id: str) -> Optional[Dict]:
         """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
-        
         # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
         curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
         if not curr_db_id:
@@ -758,7 +757,6 @@ class CodeAnalysisService:
 
     async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str):
         """분석 결과를 제목3 토글 블록으로 노션에 추가"""
-        
         # 1. 마크다운을 노션 블록으로 변환
         content_blocks = markdown_to_notion_blocks(analysis_summary)
         
