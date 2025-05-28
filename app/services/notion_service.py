@@ -2,7 +2,7 @@
 Notion API 연동 서비스
 """
 from typing import Optional, List, Dict, Any
-from datetime import datetime
+from datetime import datetime, date
 import httpx
 from app.core.config import settings
 from app.core.exceptions import NotionAPIError
@@ -497,6 +497,38 @@ class NotionService:
         if summary is not None:
             await self.update_ai_summary_by_page(page_id, summary)
 
+    # 코드 분석 결과 추가
+    async def append_code_analysis_to_page(self, page_id: str, analysis_summary: str, commit_sha: str) -> None:
+        """코드 분석 결과를 제목3 토글 블록으로 Notion 페이지에 추가"""
+        
+        # 1. 마크다운을 노션 블록으로 변환
+        content_blocks = markdown_to_notion_blocks(analysis_summary)
+        
+        # 2. 제목3 토글 블록 생성
+        today = date.today().strftime("%Y-%m-%d")
+        heading_toggle_block = {
+            "object": "block",
+            "type": "heading_3",
+            "heading_3": {
+                "rich_text": [
+                    {
+                        "type": "text", 
+                        "text": {"content": f"📅 {today} 코드 분석 ({commit_sha[:8]})"}
+                    }
+                ],
+                "is_toggleable": True,
+                "children": content_blocks  # 변환된 블록들을 children으로 추가
+            }
+        }
+        
+        # 3. 노션 페이지에 추가
+        await self._make_request(
+            "PATCH",
+            f"blocks/{page_id}/children",
+            json={"children": [heading_toggle_block]}
+        )
+        
+        notion_logger.info(f"코드 분석 결과 추가 완료: {commit_sha[:8]}")
 
     # 페이지 메타 및 블록 조회
     async def get_page_content(self, page_id: str) -> Dict[str, Any]:

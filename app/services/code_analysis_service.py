@@ -12,7 +12,8 @@ import os
 from openai import OpenAI
 from app.services.redis_service import RedisService
 from app.services.extract_for_file_service import extract_functions_by_type
-from app.utils.notion_utils import markdown_to_notion_blocks
+from app.services.notion_service import NotionService
+from app.services.auth_service import get_integration_token
 # 버퍼링 비활성화
 os.environ["PYTHONUNBUFFERED"] = "1"
 
@@ -210,7 +211,12 @@ class CodeAnalysisService:
                     metadata['custom_prompt'] = match.group(4).strip()
                     break
 
-                
+                # 파일#함수 형식: #[파일경로#함수명]
+                func_ref_match = re.search(r'\[([^#\]]+)#([^\]]+)\]', line)
+                if func_ref_match:
+                    metadata['reference_file'] = func_ref_match.group(1)
+                    metadata['reference_function'] = func_ref_match.group(2)
+                    break
 
                 # 단순 참조 파일만 있는 경우: #[파일.py]
                 ref_match = re.search(r'\[([^\]]+\.py)\]', line)
@@ -255,8 +261,14 @@ class CodeAnalysisService:
         # 참조 파일 내용 가져오기
         reference_content = None
         if 'reference_file' in item['metadata']:
+            # reference_function이 있으면 파일#함수 형식으로 조합
+            if 'reference_function' in item['metadata']:
+                reference_path = f"{item['metadata']['reference_file']}#{item['metadata']['reference_function']}"
+            else:
+                reference_path = item['metadata']['reference_file']
+                
             reference_content = await self._fetch_reference_function(
-                item['metadata']['reference_file'], 
+                reference_path,
                 item['owner'], 
                 item['repo'], 
                 item['commit_sha'],
@@ -425,13 +437,25 @@ class CodeAnalysisService:
         if '#' in reference_file:
             file_path, func_name = reference_file.split('#', 1)
             redis_key = f"{user_id}:func:{commit_sha}:{file_path}:{func_name}"
+            cached_content = self.redis_client.get(redis_key)
+            if cached_content:
+                return cached_content
         else:
             # 파일 전체 참조인 경우 주요 함수들 조회
-            redis_key = f"{user_id}:func:{commit_sha}:{reference_file}:*"
-        
-        cached_content = self.redis_client.get(redis_key)
-        if cached_content:
-            return cached_content
+            pattern = f"{user_id}:func:{commit_sha}:{reference_file}:*"
+            function_keys = self.redis_client.keys(pattern)
+            
+            if function_keys:
+                # 여러 함수가 있으면 모두 조합
+                all_summaries = []
+                for key in function_keys:
+                    func_name = key.split(":")[-1]
+                    summary = self.redis_client.get(key)
+                    if summary:
+                        all_summaries.append(f"**{func_name}():**\n{summary}")
+                
+                if all_summaries:
+                    return "\n\n".join(all_summaries)
         
         # Redis에 없으면 파일 내용 요청 (기존 방식 활용)
         return await self._request_reference_file_content(reference_file, owner, repo, commit_sha)
@@ -705,7 +729,6 @@ class CodeAnalysisService:
     
     def _build_analysis_summary(self, filename: str, file_summary: str, func_summaries: Dict[str, str]) -> str:
         """토글 블록 내부에 들어갈 마크다운 콘텐츠 구성"""
-        
         analysis_parts = [
             f"**{filename} 전체**\\n",
             file_summary,
@@ -755,35 +778,35 @@ class CodeAnalysisService:
         
         return closest_page
 
-    async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str):
+    #[app.utils.notion_utils.py#markdown_to_notion_blocks]{}
+    async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str):
         """분석 결과를 제목3 토글 블록으로 노션에 추가"""
-        # 1. 마크다운을 노션 블록으로 변환
-        content_blocks = markdown_to_notion_blocks(analysis_summary)
         
-        # 2. 제목3 토글 블록 생성
-        today = date.today().strftime("%Y-%m-%d")
-        heading_toggle_block = {
-            "object": "block",
-            "type": "heading_3",
-            "heading_3": {
-                "rich_text": [
-                    {
-                        "type": "text", 
-                        "text": {"content": f"📅 {today} 요약 ({commit_sha[:8]})"}
-                    }
-                ],
-                "is_toggleable": True,
-                "children": content_blocks  # 변환된 블록들을 children으로 추가
-            }
-        }
+        # 1. Notion 토큰 조회
+        redis_service = RedisService()
+        token = await redis_service.get_token(user_id, self.redis_client)
         
-        # 3. 노션 페이지에 추가
-        await self._make_request(
-            "PATCH",
-            f"blocks/{ai_analysis_log_page_id}/children",
-            json={"children": [heading_toggle_block]}
+        if not token:
+            # Redis에 없으면 Supabase에서 조회
+            token = await get_integration_token(user_id=user_id, provider="notion", supabase=self.supabase)
+            
+            if token:
+                # 조회한 토큰을 Redis에 저장 (1시간 만료)
+                await redis_service.set_token(user_id, token, self.redis_client, expire_seconds=3600)
+        
+        if not token:
+            api_logger.error(f"Notion 토큰을 찾을 수 없습니다: {user_id}")
+            return
+        
+        # 2. NotionService로 요청 전송
+        notion_service = NotionService(token=token)
+        await notion_service.append_code_analysis_to_page(
+            ai_analysis_log_page_id, 
+            analysis_summary, 
+            commit_sha
         )
-
+        
+        api_logger.info(f"Notion에 분석 결과 추가 완료: {commit_sha[:8]}")
 
     async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str, commit_sha: str):
         """Notion AI 요약 블록 업데이트"""
@@ -807,7 +830,8 @@ class CodeAnalysisService:
             await self._append_analysis_to_notion(
                 target_page["ai_analysis_log_page_id"], 
                 analysis_summary, 
-                commit_sha
+                commit_sha,
+                user_id
             )
             
             api_logger.info(f"파일 '{filename}' Notion 업데이트 완료")
