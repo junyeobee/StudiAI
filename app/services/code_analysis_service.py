@@ -774,7 +774,7 @@ class CodeAnalysisService:
         if not curr_db_id:
             db_result = await self.supabase.table("db_webhooks")\
                 .select("learning_db_id")\
-                .eq("user_id", user_id)\
+                .eq("created_by", user_id)\
                 .execute()
             
             if not db_result.data:
