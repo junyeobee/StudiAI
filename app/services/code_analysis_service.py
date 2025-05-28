@@ -771,8 +771,10 @@ class CodeAnalysisService:
         """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
         try:
             api_logger.info(f"_find_target_page 시작: {user_id}")
-            # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
-            curr_db_id = await self.redis_service.get_default_db(user_id, self.redis_client)
+            # 1. 현재 활성 DB 찾기 (Redis → Supabase 순) - 동기식으로 변경
+            curr_db_id = self.redis_client.get(f"user:{user_id}:default_db")
+            if curr_db_id:
+                curr_db_id = curr_db_id.decode('utf-8') if isinstance(curr_db_id, bytes) else curr_db_id
             api_logger.info(f"Redis에서 DB ID 조회 완료: {curr_db_id}")
             
             if not curr_db_id:
@@ -789,8 +791,14 @@ class CodeAnalysisService:
                 curr_db_id = db_result.data[0]["learning_db_id"]
             
             api_logger.info(f"최종 DB ID: {curr_db_id}")
-            # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순) 
-            pages = await self.redis_service.get_db_pages(user_id, curr_db_id, self.redis_client)
+            # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순) - 동기식으로 변경
+            pages_key = f"user:{user_id}:db:{curr_db_id}:pages"
+            pages_data = self.redis_client.get(pages_key)
+            pages = None
+            if pages_data:
+                import json
+                pages_str = pages_data.decode('utf-8') if isinstance(pages_data, bytes) else pages_data
+                pages = json.loads(pages_str)
             api_logger.info(f"Redis에서 페이지 조회 완료: {len(pages) if pages else 0}개")
             
             if not pages:
@@ -817,18 +825,29 @@ class CodeAnalysisService:
     #[app.utils.notion_utils.py#markdown_to_notion_blocks]{}
     async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str):
         """분석 결과를 제목3 토글 블록으로 노션에 추가"""
-        # 1. Notion 토큰 조회
-        redis_service = RedisService()
-        token = await redis_service.get_token(user_id, self.redis_client)
+        # 1. Notion 토큰 조회 (완전 동기식)
+        token_key = f"user:{user_id}:notion_token"
+        api_logger.info(f"Redis에서 토큰 조회 시도: {token_key}")
+        token = self.redis_client.get(token_key)
+        
+        # Redis에 있으면 bytes를 str로 변환
+        if token:
+            token = token.decode('utf-8') if isinstance(token, bytes) else token
+            api_logger.info(f"Redis에서 토큰 조회 성공: {token[:20]}...")
+        else:
+            api_logger.info("Redis에 토큰이 없음, Supabase에서 조회")
 
         if not token:
             # Redis에 없으면 Supabase에서 조회 (동기식 중복 구현)
             try:
+                api_logger.info("Supabase 토큰 조회 시작")
                 integration_result = self.supabase.table("user_integrations")\
                     .select("*")\
                     .eq("user_id", user_id)\
                     .eq("provider", "notion")\
                     .execute()
+                
+                api_logger.info(f"Supabase 조회 결과: {len(integration_result.data)}개")
                 
                 if integration_result.data:
                     # 암호화된 토큰 복호화 (auth_service 로직 복사)
@@ -836,6 +855,7 @@ class CodeAnalysisService:
                     from Crypto.Cipher import AES
                     from app.core.config import settings
                     
+                    api_logger.info("토큰 복호화 시작")
                     res = integration_result.data[0]
                     encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
                     iv = base64.b64decode(res["token_iv"])
@@ -847,18 +867,23 @@ class CodeAnalysisService:
                     cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
                     token = cipher.decrypt_and_verify(encrypted_token, tag).decode('utf-8')
                     
+                    api_logger.info(f"토큰 복호화 성공: {token[:20]}...")
+                    
+                    # 조회한 토큰을 Redis에 저장 (1시간 만료) - 동기식으로 변경
+                    self.redis_client.setex(token_key, 3600, token)
+                    api_logger.info("Redis에 토큰 저장 완료")
+                    
             except Exception as e:
-                api_logger.error(f"토큰 조회 실패: {str(e)}")
+                api_logger.error(f"토큰 조회/복호화 실패: {str(e)}")
+                import traceback
+                api_logger.error(f"상세 오류: {traceback.format_exc()}")
                 token = None
-            
-            if token:
-                # 조회한 토큰을 Redis에 저장 (1시간 만료)
-                await redis_service.set_token(user_id, token, self.redis_client, expire_seconds=3600)
-
                 
         if not token:
             api_logger.error(f"Notion 토큰을 찾을 수 없습니다: {user_id}")
             return
+        
+        api_logger.info(f"최종 토큰 확인: {token[:20]}...")
         
         # 2. NotionService로 요청 전송
         notion_service = NotionService(token=token)
