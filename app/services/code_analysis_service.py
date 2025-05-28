@@ -791,6 +791,7 @@ class CodeAnalysisService:
             if token:
                 # 조회한 토큰을 Redis에 저장 (1시간 만료)
                 await redis_service.set_token(user_id, token, self.redis_client, expire_seconds=3600)
+
                 
         if not token:
             api_logger.error(f"Notion 토큰을 찾을 수 없습니다: {user_id}")
