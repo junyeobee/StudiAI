@@ -533,16 +533,40 @@ class CodeAnalysisService:
         """파일별 종합 분석 및 Notion 업데이트"""
         filename = func_info['filename']
         
-        # 1. 파일의 모든 함수 분석이 완료되었는지 확인
-        if await self._is_file_analysis_complete(filename, user_id):
-            # 2. 파일별 종합 분석 수행
-            file_summary = await self._generate_file_level_analysis(filename, user_id)
+        try:
+            api_logger.info(f"=== Notion 업데이트 시작: {filename} ===")
             
-            # 3. Notion AI 요약 블록 업데이트
-            await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
+            # 1. 파일의 모든 함수 분석이 완료되었는지 확인
+            api_logger.info("1단계: 파일 분석 완료 확인 중...")
+            is_complete = await self._is_file_analysis_complete(filename, user_id)
+            api_logger.info(f"파일 분석 완료 여부: {is_complete}")
             
-            # 4. 아키텍처 개선 제안 생성
-            await self._generate_architecture_suggestions(filename, file_summary, user_id)
+            if is_complete:
+                # 2. 파일별 종합 분석 수행
+                api_logger.info("2단계: 파일별 종합 분석 시작...")
+                file_summary = await self._generate_file_level_analysis(filename, user_id)
+                api_logger.info("파일별 종합 분석 완료")
+                
+                # 3. Notion AI 요약 블록 업데이트
+                api_logger.info("3단계: Notion AI 블록 업데이트 시작...")
+                await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
+                api_logger.info("Notion AI 블록 업데이트 완료")
+                
+                # 4. 아키텍처 개선 제안 생성
+                api_logger.info("4단계: 아키텍처 개선 제안 생성 시작...")
+                await self._generate_architecture_suggestions(filename, file_summary, user_id)
+                api_logger.info("아키텍처 개선 제안 생성 완료")
+                
+            api_logger.info(f"=== Notion 업데이트 완료: {filename} ===")
+            
+        except Exception as e:
+            api_logger.error(f"=== Notion 업데이트 오류: {filename} ===")
+            api_logger.error(f"오류 타입: {type(e).__name__}")
+            api_logger.error(f"오류 메시지: {str(e)}")
+            api_logger.error(f"오류 발생 위치 추적:")
+            import traceback
+            api_logger.error(traceback.format_exc())
+            raise
 
     async def _is_file_analysis_complete(self, filename: str, user_id: str) -> bool:
         """파일의 모든 함수 분석이 완료되었는지 확인"""
