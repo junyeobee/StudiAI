@@ -213,6 +213,78 @@ class TreeSitterBaseExtractor(BaseExtractor):
         
         # 간단한 재귀 탐색으로 함수 노드들 찾기
         def visit_node(node: Node):
+            # 클래스 정의 처리
+            if node.type == 'class_definition':
+                class_name = self._extract_function_name(node, content)
+                class_start_line, class_end_line = self._get_node_line_range(node)
+                
+                # 클래스 내부 메서드들 찾기
+                class_methods = []
+                method_lines = set()
+                
+                def find_methods_in_class(class_node):
+                    for child in class_node.children:
+                        if self._is_function_node(child):
+                            method_name = self._extract_function_name(child, content)
+                            method_start, method_end = self._get_node_line_range(child)
+                            method_text = self._get_node_text(child, content)
+                            
+                            class_methods.append({
+                                'name': f"{class_name}.{method_name}",
+                                'node': child,
+                                'start_line': method_start,
+                                'end_line': method_end,
+                                'text': method_text,
+                                'type': 'method'  # 명시적 타입 지정
+                            })
+                            
+                            # 메서드가 차지하는 라인들 기록
+                            method_lines.update(range(method_start, method_end + 1))
+                        
+                        # 중첩 클래스나 다른 구조체도 재귀 탐색
+                        for grandchild in child.children:
+                            find_methods_in_class(grandchild)
+                
+                find_methods_in_class(node)
+                
+                # 클래스 헤더 + 상수/속성 부분만 추출
+                if class_methods:
+                    # 메서드들을 함수 리스트에 추가
+                    functions.extend(class_methods)
+                    
+                    # 클래스 상수/속성 부분 추출 (메서드 제외)
+                    lines = content.decode('utf8').splitlines()
+                    class_header_lines = []
+                    
+                    for i in range(class_start_line - 1, class_end_line):
+                        line_num = i + 1
+                        if line_num not in method_lines:
+                            class_header_lines.append(lines[i] if i < len(lines) else "")
+                    
+                    if class_header_lines:
+                        class_header_text = '\n'.join(class_header_lines)
+                        functions.append({
+                            'name': f"{class_name}_header",
+                            'node': node,
+                            'start_line': class_start_line,
+                            'end_line': class_end_line,
+                            'text': class_header_text,
+                            'type': 'class_header'  # 명시적 타입 지정
+                        })
+                else:
+                    # 메서드가 없는 클래스는 전체를 하나로 처리
+                    class_text = self._get_node_text(node, content)
+                    functions.append({
+                        'name': class_name,
+                        'node': node,
+                        'start_line': class_start_line,
+                        'end_line': class_end_line,
+                        'text': class_text,
+                        'type': 'class'  # 명시적 타입 지정
+                    })
+                
+                return  # 클래스 내부는 이미 처리했으므로 더 이상 재귀하지 않음
+            
             if self._is_function_node(node):
                 func_name = self._extract_function_name(node, content)
                 start_line, end_line = self._get_node_line_range(node)
@@ -235,9 +307,9 @@ class TreeSitterBaseExtractor(BaseExtractor):
         return functions
     
     def _is_function_node(self, node: Node) -> bool:
-        """노드가 함수 정의인지 확인"""
-        # 각 언어별로 오버라이드 필요
-        function_types = ['function_definition', 'method_definition', 'function_declaration', 'arrow_function']
+        """노드가 함수 정의인지 확인 (클래스 제외)"""
+        # 클래스는 제외하고 순수 함수/메서드만 처리
+        function_types = ['function_definition', 'method_definition', 'function_declaration', 'arrow_function', 'async_function_definition']
         return node.type in function_types
     
     async def extract_functions(self, content: str, filename: str, diff_info: Dict[int, Dict]) -> List[Dict[str, Any]]:
@@ -264,10 +336,14 @@ class TreeSitterBaseExtractor(BaseExtractor):
             func_end = func_info['end_line']
             func_name = func_info['name']
             
-            # 컨텍스트 포함해서 추출
-            func_code, actual_start = self._extract_function_with_context(
-                lines, func_start, func_end, func_name
-            )
+            # 컨텍스트 포함해서 추출 (클래스 헤더는 이미 추출되어 있으므로 건너뜀)
+            if func_info.get('type') in ['class_header', 'class']:
+                func_code = func_info['text']
+                actual_start = func_start
+            else:
+                func_code, actual_start = self._extract_function_with_context(
+                    lines, func_start, func_end, func_name
+                )
             
             # 변경 사항 찾기
             func_changes = {
@@ -275,9 +351,12 @@ class TreeSitterBaseExtractor(BaseExtractor):
                 if actual_start <= line_num <= func_end
             }
             
+            # 타입이 이미 지정된 경우 그대로 사용, 아니면 결정
+            func_type = func_info.get('type') or self._determine_function_type(func_info['node'])
+            
             functions.append({
                 'name': func_name,
-                'type': self._determine_function_type(func_info['node']),
+                'type': func_type,
                 'code': func_code,
                 'start_line': actual_start,
                 'end_line': func_end,
@@ -482,8 +561,9 @@ class PythonExtractor(TreeSitterBaseExtractor):
         }
     
     def _is_function_node(self, node: Node) -> bool:
-        """Python 함수/클래스 노드 확인"""
-        function_types = ['function_definition', 'async_function_definition', 'class_definition']
+        """Python 함수/메서드 노드 확인 (클래스 제외)"""
+        # 클래스는 제외하고 순수 함수/메서드만 처리
+        function_types = ['function_definition', 'async_function_definition']
         return node.type in function_types
     
     def _extract_function_name(self, node: Node, content: bytes) -> str:
@@ -557,10 +637,11 @@ class JavaScriptExtractor(TreeSitterBaseExtractor):
         }
     
     def _is_function_node(self, node: Node) -> bool:
-        """JavaScript 함수/클래스 노드 확인"""
+        """JavaScript 함수/메서드 노드 확인 (클래스 제외)"""
+        # 클래스는 제외하고 순수 함수/메서드만 처리
         function_types = [
             'function_declaration', 'arrow_function', 'method_definition',
-            'class_declaration', 'function_expression'
+            'function_expression'
         ]
         return node.type in function_types
     
@@ -625,8 +706,9 @@ class JavaExtractor(TreeSitterBaseExtractor):
         }
     
     def _is_function_node(self, node: Node) -> bool:
-        """Java 메서드/클래스 노드 확인"""
-        function_types = ['method_declaration', 'constructor_declaration', 'class_declaration']
+        """Java 메서드 노드 확인 (클래스 제외)"""
+        # 클래스는 제외하고 순수 메서드만 처리
+        function_types = ['method_declaration', 'constructor_declaration']
         return node.type in function_types
     
     # tree-sitter 기반 추출을 위해 부모 클래스의 extract_functions 사용
@@ -666,8 +748,9 @@ class CExtractor(TreeSitterBaseExtractor):
         }
     
     def _is_function_node(self, node: Node) -> bool:
-        """C/C++ 함수/클래스 노드 확인"""
-        function_types = ['function_definition', 'class_specifier', 'struct_specifier']
+        """C/C++ 함수 노드 확인 (클래스/구조체 제외)"""
+        # 클래스/구조체는 제외하고 순수 함수만 처리
+        function_types = ['function_definition']
         return node.type in function_types
     
     # tree-sitter 기반 추출을 위해 부모 클래스의 extract_functions 사용
