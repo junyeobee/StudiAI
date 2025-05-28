@@ -472,7 +472,9 @@ class CodeAnalysisService:
                 # 여러 함수가 있으면 모두 조합
                 all_summaries = []
                 for key in function_keys:
-                    func_name = key.split(":")[-1]
+                    # Redis key가 bytes일 수 있으므로 str로 변환
+                    key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+                    func_name = key_str.split(":")[-1]
                     summary_raw = self.redis_client.get(key)
                     if summary_raw:
                         # bytes면 str로 변환, 이미 str이면 그대로 사용
@@ -615,7 +617,10 @@ class CodeAnalysisService:
         
         function_summaries = {}
         for key in function_keys:
-            function_name = key.split(":")[-1]  # func:파일:함수명 → 함수명
+            # Redis key가 bytes일 수 있으므로 str로 변환
+            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
+            function_name = key_str.split(":")[-1]  # func:파일:함수명 → 함수명
+            
             summary_raw = self.redis_client.get(key)
             if summary_raw:
                 # bytes면 str로 변환, 이미 str이면 그대로 사용
@@ -840,8 +845,10 @@ class CodeAnalysisService:
         func_summaries = {}
         
         for key in func_keys:
+            # Redis key가 bytes일 수 있으므로 str로 변환
+            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
             # key 형식: "{user_id}:func:{commit_sha}:{filename}:{func_name}"
-            func_name = key.split(":")[-1]  # 마지막 부분이 함수명
+            func_name = key_str.split(":")[-1]  # 마지막 부분이 함수명
             summary_raw = self.redis_client.get(key)
             if summary_raw:
                 # bytes면 str로 변환, 이미 str이면 그대로 사용
