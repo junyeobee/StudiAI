@@ -885,8 +885,24 @@ class CodeAnalysisService:
         
         api_logger.info(f"최종 토큰 확인: {token[:20]}...")
         
-        # 2. NotionService로 요청 전송
+        # 2. NotionService로 요청 전송 전에 페이지 구조 확인
         notion_service = NotionService(token=token)
+        
+        # 디버깅: 현재 페이지 블록 구조 확인
+        try:
+            api_logger.info(f"페이지 블록 구조 확인 시작: {ai_analysis_log_page_id}")
+            page_content = await notion_service.get_page_content(ai_analysis_log_page_id)
+            blocks = page_content.get("blocks", [])
+            api_logger.info(f"현재 페이지 블록 개수: {len(blocks)}")
+            
+            for i, block in enumerate(blocks[:5]):  # 처음 5개 블록만 로깅
+                block_type = block.get("type", "unknown")
+                block_id = block.get("id", "no_id")
+                api_logger.info(f"블록 {i}: type={block_type}, id={block_id}")
+                
+        except Exception as e:
+            api_logger.error(f"페이지 구조 확인 실패: {str(e)}")
+        
         await notion_service.append_code_analysis_to_page(
             ai_analysis_log_page_id, 
             analysis_summary, 
