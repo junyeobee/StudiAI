@@ -457,8 +457,10 @@ class CodeAnalysisService:
                 all_summaries = []
                 for key in function_keys:
                     func_name = key.split(":")[-1]
-                    summary = self.redis_client.get(key)
-                    if summary:
+                    summary_raw = self.redis_client.get(key)
+                    if summary_raw:
+                        # bytes면 str로 변환, 이미 str이면 그대로 사용
+                        summary = summary_raw.decode('utf-8') if isinstance(summary_raw, bytes) else summary_raw
                         all_summaries.append(f"**{func_name}():**\n{summary}")
                 
                 if all_summaries:
@@ -560,8 +562,10 @@ class CodeAnalysisService:
         function_summaries = {}
         for key in function_keys:
             function_name = key.split(":")[-1]  # func:파일:함수명 → 함수명
-            summary = self.redis_client.get(key)
-            if summary:
+            summary_raw = self.redis_client.get(key)
+            if summary_raw:
+                # bytes면 str로 변환, 이미 str이면 그대로 사용
+                summary = summary_raw.decode('utf-8') if isinstance(summary_raw, bytes) else summary_raw
                 function_summaries[function_name] = summary
         
         # 2. 함수들을 타입별로 분류
@@ -744,8 +748,10 @@ class CodeAnalysisService:
         for key in func_keys:
             # key 형식: "{user_id}:func:{commit_sha}:{filename}:{func_name}"
             func_name = key.split(":")[-1]  # 마지막 부분이 함수명
-            summary = self.redis_client.get(key)
-            if summary:
+            summary_raw = self.redis_client.get(key)
+            if summary_raw:
+                # bytes면 str로 변환, 이미 str이면 그대로 사용
+                summary = summary_raw.decode('utf-8') if isinstance(summary_raw, bytes) else summary_raw
                 func_summaries[func_name] = summary
         
         api_logger.info(f"파일 '{filename}': {len(func_summaries)}개 함수 분석 결과 수집")
