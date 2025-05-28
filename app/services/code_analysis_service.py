@@ -258,13 +258,11 @@ class CodeAnalysisService:
         user_id = item['user_id']
         
         api_logger.info(f"함수 '{func_name}' 분석 시작")
-        sys.stdout.flush()
         
         # Redis에서 이전 분석 결과 조회
         redis_key = f"{user_id}:func:{commit_sha}:{filename}:{func_name}"
-        
         previous_summary = self.redis_client.get(redis_key)
-        api_logger.info(f"가져온 타입: {type(previous_summary)} 이전 분석 결과: {previous_summary}")
+        
         # 참조 파일 내용 가져오기
         reference_content = None
         if 'reference_file' in item['metadata']:
@@ -303,32 +301,15 @@ class CodeAnalysisService:
                 previous_summary, 
                 reference_content
             )
-        api_logger.info(f"저장할 타입: {type(summary)} 저장할 결과: {summary}")
-        
-        # Redis 저장 전 디버깅 로그
-        api_logger.info(f"=== Redis 저장 디버깅 ===")
-        api_logger.info(f"Redis 키: {redis_key}")
-        api_logger.info(f"summary 원본 타입: {type(summary)}")
-        api_logger.info(f"summary 원본 값: {repr(summary)}")
         
         # Redis에 최종 요약 저장 (str을 bytes로 인코딩)
         summary_bytes = summary.encode('utf-8') if isinstance(summary, str) else summary
-        api_logger.info(f"변환 후 타입: {type(summary_bytes)}")
-        api_logger.info(f"변환 후 값: {repr(summary_bytes[:100])}...")  # 처음 100바이트만
-        
-        try:
-            self.redis_client.setex(redis_key, 86400 * 7, summary_bytes)  # 7일 보관
-            api_logger.info("Redis 저장 성공!")
-        except Exception as e:
-            api_logger.error(f"Redis 저장 실패: {type(e).__name__}: {e}")
-            api_logger.error(f"실패 시점 summary_bytes 타입: {type(summary_bytes)}")
-            raise
+        self.redis_client.setex(redis_key, 86400 * 7, summary_bytes)  # 7일 보관
         
         # Notion 업데이트는 파일 단위로 별도 처리
         await self._update_notion_if_needed(func_info, summary, user_id, commit_sha)
         
         api_logger.info(f"함수 '{func_name}' 분석 완료")
-        sys.stdout.flush()
     
     def _split_function_if_needed(self, code: str, max_length: int = 2000) -> List[str]:
         """함수가 너무 길면 청크로 분할"""
@@ -383,7 +364,6 @@ class CodeAnalysisService:
         
         # 이전 요약이 있으면 포함
         if previous_summary:
-            api_logger.info(f"이전 분석 결과: {type(previous_summary)}: {previous_summary}")
             prompt_parts.append(f"\n이전 분석 결과:\n{previous_summary}")
             if total_chunks > 1:
                 prompt_parts.append("\n위 분석을 바탕으로 다음 코드 청크를 분석하고 통합된 요약을 제공하세요.")
@@ -433,23 +413,6 @@ class CodeAnalysisService:
 """)
         
         full_prompt = "\n".join(prompt_parts)
-        
-        # 파싱 정보 로깅
-        api_logger.info(f"=== 함수 파싱 정보 ===")
-        api_logger.info(f"함수명: {func_info['name']}")
-        api_logger.info(f"타입: {func_info.get('type', 'unknown')}")
-        api_logger.info(f"파일명: {func_info.get('filename', 'unknown')}")
-        api_logger.info(f"라인 범위: {func_info.get('start_line', 0)}-{func_info.get('end_line', 0)}")
-        api_logger.info(f"변경사항 유무: {func_info.get('has_changes', False)}")
-        api_logger.info(f"변경사항 개수: {len(func_info.get('changes', {}))}")
-        if func_info.get('changes'):
-            api_logger.info(f"변경된 라인들: {list(func_info.get('changes', {}).keys())}")
-        api_logger.info(f"청크 정보: {chunk_index + 1}/{total_chunks}")
-        api_logger.info(f"이전 요약 유무: {'있음' if previous_summary else '없음'}")
-        api_logger.info(f"참조 콘텐츠 유무: {'있음' if reference_content else '없음'}")
-        api_logger.info(f"메타데이터: {metadata}")
-        api_logger.info(f"코드 길이: {len(code)}자")
-        api_logger.info("========================")
         
         # 임시 응답 반환 (실제 LLM 호출 대신)
         return f"[파싱 완료] {func_info['name']} 함수 분석 정보 로깅됨"
@@ -503,22 +466,8 @@ class CodeAnalysisService:
         
         # JSON 데이터를 bytes로 인코딩해서 저장
         request_data_json = json.dumps(request_data)
-        
-        # Redis 저장 전 디버깅 로그
-        api_logger.info(f"=== JSON Redis 저장 디버깅 ===")
-        api_logger.info(f"Redis 키: {request_key}")
-        api_logger.info(f"JSON 원본 타입: {type(request_data_json)}")
-        api_logger.info(f"JSON 원본 값: {repr(request_data_json)}")
-        
         request_data_bytes = request_data_json.encode('utf-8')
-        api_logger.info(f"변환 후 타입: {type(request_data_bytes)}")
-        
-        try:
-            self.redis_client.setex(request_key, 300, request_data_bytes)
-            api_logger.info("JSON Redis 저장 성공!")
-        except Exception as e:
-            api_logger.error(f"JSON Redis 저장 실패: {type(e).__name__}: {e}")
-            raise
+        self.redis_client.setex(request_key, 300, request_data_bytes)
         
         # 5초 폴링 대기
         for _ in range(10):
@@ -535,40 +484,16 @@ class CodeAnalysisService:
         """파일별 종합 분석 및 Notion 업데이트"""
         filename = func_info['filename']
         
-        try:
-            api_logger.info(f"=== Notion 업데이트 시작: {filename} ===")
+        # 1. 파일의 모든 함수 분석이 완료되었는지 확인
+        if await self._is_file_analysis_complete(filename, user_id):
+            # 2. 파일별 종합 분석 수행
+            file_summary = await self._generate_file_level_analysis(filename, user_id)
             
-            # 1. 파일의 모든 함수 분석이 완료되었는지 확인
-            api_logger.info("1단계: 파일 분석 완료 확인 중...")
-            is_complete = await self._is_file_analysis_complete(filename, user_id)
-            api_logger.info(f"파일 분석 완료 여부: {is_complete}")
+            # 3. Notion AI 요약 블록 업데이트
+            await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
             
-            if is_complete:
-                # 2. 파일별 종합 분석 수행
-                api_logger.info("2단계: 파일별 종합 분석 시작...")
-                file_summary = await self._generate_file_level_analysis(filename, user_id)
-                api_logger.info("파일별 종합 분석 완료")
-                
-                # 3. Notion AI 요약 블록 업데이트
-                api_logger.info("3단계: Notion AI 블록 업데이트 시작...")
-                await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
-                api_logger.info("Notion AI 블록 업데이트 완료")
-                
-                # 4. 아키텍처 개선 제안 생성
-                api_logger.info("4단계: 아키텍처 개선 제안 생성 시작...")
-                await self._generate_architecture_suggestions(filename, file_summary, user_id)
-                api_logger.info("아키텍처 개선 제안 생성 완료")
-                
-            api_logger.info(f"=== Notion 업데이트 완료: {filename} ===")
-            
-        except Exception as e:
-            api_logger.error(f"=== Notion 업데이트 오류: {filename} ===")
-            api_logger.error(f"오류 타입: {type(e).__name__}")
-            api_logger.error(f"오류 메시지: {str(e)}")
-            api_logger.error(f"오류 발생 위치 추적:")
-            import traceback
-            api_logger.error(traceback.format_exc())
-            raise
+            # 4. 아키텍처 개선 제안 생성
+            await self._generate_architecture_suggestions(filename, file_summary, user_id)
 
     async def _is_file_analysis_complete(self, filename: str, user_id: str) -> bool:
         """파일의 모든 함수 분석이 완료되었는지 확인"""
@@ -745,35 +670,19 @@ class CodeAnalysisService:
 
     **응답 형식:** 마크다운으로 구조화하여 Notion에서 읽기 좋게 작성
     """
-        api_logger.info(f"파일 분석 프롬프트: {analysis_prompt}")
         # 4. LLM 호출하여 종합 분석
         file_analysis = await self._call_llm_for_file_analysis(analysis_prompt)
         
         # 5. 분석 결과를 Redis에 캐싱 (파일 단위)
         file_cache_key = f"{user_id}:file_analysis:{filename}"
-        
-        # Redis 저장 전 디버깅 로그
-        api_logger.info(f"=== 파일 분석 Redis 저장 디버깅 ===")
-        api_logger.info(f"Redis 키: {file_cache_key}")
-        api_logger.info(f"file_analysis 원본 타입: {type(file_analysis)}")
-        api_logger.info(f"file_analysis 원본 값: {repr(file_analysis[:200])}...")
-        
         file_analysis_bytes = file_analysis.encode('utf-8') if isinstance(file_analysis, str) else file_analysis
-        api_logger.info(f"변환 후 타입: {type(file_analysis_bytes)}")
-        
-        try:
-            self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis_bytes)  # 3일 보관
-            api_logger.info("파일 분석 Redis 저장 성공!")
-        except Exception as e:
-            api_logger.error(f"파일 분석 Redis 저장 실패: {type(e).__name__}: {e}")
-            raise
+        self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis_bytes)  # 3일 보관
         
         return file_analysis
 
     async def _call_llm_for_file_analysis(self, prompt: str) -> str:
         """파일 전체 분석을 위한 LLM 호출"""
         # 임시로 LLM 호출 비활성화 - 디버깅용
-        api_logger.info("파일 분석 LLM 호출 시작")
         
         # 더미 응답 반환 (실제 LLM 호출 대신)
         dummy_response = f"""
@@ -796,25 +705,7 @@ class CodeAnalysisService:
 - 우선순위별 개선사항 분석 완료
 """
         
-        api_logger.info("파일 분석 LLM 호출 완료 (더미 응답)")
         return dummy_response
-        
-        # 기존 OpenAI 호출 코드 (임시 비활성화)
-        # client = OpenAI(
-        #     base_url="http://localhost:1234/v1",
-        #     api_key="lm-studio",
-        # )
-        # model_name = "meta-llama-3-8b-instruct"
-        # response = client.chat.completions.create(
-        #     model=model_name,
-        #     messages=[
-        #         {"role": "system", "content": "당신은 시니어 소프트웨어 아키텍트입니다. 코드의 전체적인 구조와 개선방안을 분석하는 전문가입니다."},
-        #         {"role": "user", "content": prompt}
-        #     ],
-        # )
-        # result = response.choices[0].message.content
-        # sys.stdout.flush()
-        # return result
     
     def _find_closest_page_to_today(self, pages: list) -> dict | None:
         """
@@ -998,19 +889,5 @@ class CodeAnalysisService:
         
         # Redis에 개선 제안 별도 저장 (str을 bytes로 인코딩)
         suggestions_key = f"{user_id}:suggestions:{filename}"
-        
-        # Redis 저장 전 디버깅 로그
-        api_logger.info(f"=== Suggestions Redis 저장 디버깅 ===")
-        api_logger.info(f"Redis 키: {suggestions_key}")
-        api_logger.info(f"suggestions 원본 타입: {type(suggestions)}")
-        api_logger.info(f"suggestions 원본 값: {repr(suggestions[:200])}...")
-        
         suggestions_bytes = suggestions.encode('utf-8') if isinstance(suggestions, str) else suggestions
-        api_logger.info(f"변환 후 타입: {type(suggestions_bytes)}")
-        
-        try:
-            self.redis_client.setex(suggestions_key, 86400 * 7, suggestions_bytes)  # 7일 보관
-            api_logger.info("Suggestions Redis 저장 성공!")
-        except Exception as e:
-            api_logger.error(f"Suggestions Redis 저장 실패: {type(e).__name__}: {e}")
-            raise
+        self.redis_client.setex(suggestions_key, 86400 * 7, suggestions_bytes)  # 7일 보관
