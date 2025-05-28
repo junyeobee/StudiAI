@@ -764,6 +764,7 @@ class CodeAnalysisService:
                 summary,
                 ""
             ])
+            
         api_logger.info(f"분석 요약 구성 완료: {analysis_parts}")
         return "\n".join(analysis_parts)
     
