@@ -303,7 +303,7 @@ class CodeAnalysisService:
                 previous_summary, 
                 reference_content
             )
-        
+        api_logger.info(f"저장할 타입: {type(summary)} 저장할 결과: {summary}")
         # Redis에 최종 요약 저장
         self.redis_client.setex(redis_key, 86400 * 7, summary)  # 7일 보관
         
@@ -366,7 +366,7 @@ class CodeAnalysisService:
         
         # 이전 요약이 있으면 포함
         if previous_summary:
-            api_logger.info(f"이전 분석 결과 타입: {type(previous_summary)}")
+            api_logger.info(f"이전 분석 결과: {type(previous_summary)}: {previous_summary}")
             prompt_parts.append(f"\n이전 분석 결과:\n{previous_summary}")
             if total_chunks > 1:
                 prompt_parts.append("\n위 분석을 바탕으로 다음 코드 청크를 분석하고 통합된 요약을 제공하세요.")
@@ -375,7 +375,7 @@ class CodeAnalysisService:
         
         # 참조 파일 내용 포함
         if reference_content:
-            prompt_parts.append(f"\n참조 함수 코드(타입):\n{reference_content}")
+            prompt_parts.append(f"\n참조 함수 코드:\n{reference_content}")
         
         # 메타데이터 기반 커스텀 프롬프트
         if 'custom_prompt' in metadata:
