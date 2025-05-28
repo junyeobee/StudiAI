@@ -504,7 +504,7 @@ class NotionService:
         # 1. 마크다운을 노션 블록으로 변환
         content_blocks = markdown_to_notion_blocks(analysis_summary)
         
-        # 2. 제목3 토글 블록 생성
+        # 2. 먼저 빈 제목3 토글 블록 생성
         today = date.today().strftime("%Y-%m-%d")
         heading_toggle_block = {
             "object": "block",
@@ -516,19 +516,35 @@ class NotionService:
                         "text": {"content": f"📅 {today} 코드 분석 ({commit_sha[:8]})"}
                     }
                 ],
-                "is_toggleable": True,
-                "children": content_blocks  # 변환된 블록들을 children으로 추가
+                "is_toggleable": True
+                # children 제거 - 나중에 따로 추가
             }
         }
         
-        # 3. 노션 페이지에 추가
-        await self._make_request(
+        # 3. 빈 토글 블록을 노션 페이지에 먼저 추가
+        toggle_response = await self._make_request(
             "PATCH",
             f"blocks/{page_id}/children",
             json={"children": [heading_toggle_block]}
         )
         
-        notion_logger.info(f"코드 분석 결과 추가 완료: {commit_sha[:8]}")
+        # 4. 생성된 토글 블록의 ID 추출
+        toggle_block_id = toggle_response["results"][0]["id"]
+        
+        # 5. content_blocks를 100개씩 나누어서 토글 블록에 추가
+        max_blocks_per_request = 100
+        for i in range(0, len(content_blocks), max_blocks_per_request):
+            chunk = content_blocks[i:i + max_blocks_per_request]
+            
+            await self._make_request(
+                "PATCH",
+                f"blocks/{toggle_block_id}/children",
+                json={"children": chunk}
+            )
+            
+            notion_logger.info(f"블록 청크 {i//max_blocks_per_request + 1} 추가 완료 ({len(chunk)}개 블록)")
+        
+        notion_logger.info(f"코드 분석 결과 추가 완료: {commit_sha[:8]} (총 {len(content_blocks)}개 블록)")
 
     # 페이지 메타 및 블록 조회
     async def get_page_content(self, page_id: str) -> Dict[str, Any]:
