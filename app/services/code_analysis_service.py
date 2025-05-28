@@ -804,7 +804,7 @@ class CodeAnalysisService:
         """분석 결과를 제목3 토글 블록으로 노션에 추가"""
         # 1. Notion 토큰 조회
         redis_service = RedisService()
-        token = await redis_service.get_token(user_id, self.redis_client)
+        token = redis_service.get_token(user_id, self.redis_client)
 
         if not token:
             # Redis에 없으면 Supabase에서 조회
