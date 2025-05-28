@@ -683,7 +683,7 @@ class CodeAnalysisService:
     async def _call_llm_for_file_analysis(self, prompt: str) -> str:
         """파일 전체 분석을 위한 LLM 호출"""
         # 임시로 LLM 호출 비활성화 - 디버깅용
-        
+        api_logger.info("파일 분석 LLM 호출 완료 (더미 응답)")
         # 더미 응답 반환 (실제 LLM 호출 대신)
         dummy_response = f"""
 ## 🏛️ 아키텍처 분석
