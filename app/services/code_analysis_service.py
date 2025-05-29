@@ -694,16 +694,95 @@ class CodeAnalysisService:
     - 구현 난이도 및 소요 시간 추정
 
     **응답 형식:** 마크다운으로 구조화하여 Notion에서 읽기 좋게 작성
-    """
-        # 4. LLM 호출하여 종합 분석
-        file_analysis = await self._call_llm_for_file_analysis(analysis_prompt)
+        """
         
-        # 5. 분석 결과를 Redis에 캐싱 (파일 단위)
+        # 4. 프롬프트 정리 (탭문자, 연속 공백 제거)
+        analysis_prompt = re.sub(r'\t+', ' ', analysis_prompt)  # 탭을 공백으로
+        analysis_prompt = re.sub(r' +', ' ', analysis_prompt)   # 연속 공백을 하나로
+        analysis_prompt = re.sub(r'\n\s*\n', '\n\n', analysis_prompt)  # 연속 빈줄을 두줄로
+        
+        # 5. 4800자로 청크 분할
+        if len(analysis_prompt) <= 4800:
+            # 단일 청크 처리
+            file_analysis = await self._call_llm_for_file_analysis(analysis_prompt)
+        else:
+            # 다중 청크 연속 처리
+            chunks = self._split_prompt_into_chunks(analysis_prompt, 4800)
+            file_analysis = await self._process_multi_chunk_analysis(filename, chunks)
+        
+        # 6. 분석 결과를 Redis에 캐싱 (파일 단위)
         file_cache_key = f"{user_id}:file_analysis:{filename}"
         file_analysis_bytes = file_analysis.encode('utf-8') if isinstance(file_analysis, str) else file_analysis
         self.redis_client.setex(file_cache_key, 86400 * 3, file_analysis_bytes)  # 3일 보관
         
         return file_analysis
+
+    def _split_prompt_into_chunks(self, prompt: str, max_length: int = 4800) -> List[str]:
+        """프롬프트를 지정된 길이로 청크 분할"""
+        if len(prompt) <= max_length:
+            return [prompt]
+        
+        chunks = []
+        lines = prompt.split('\n')
+        current_chunk = ""
+        
+        for line in lines:
+            # 현재 줄을 추가했을 때 길이 확인
+            test_chunk = current_chunk + '\n' + line if current_chunk else line
+            
+            if len(test_chunk) <= max_length:
+                current_chunk = test_chunk
+            else:
+                # 현재 청크가 비어있지 않으면 저장
+                if current_chunk:
+                    chunks.append(current_chunk)
+                    current_chunk = line
+                else:
+                    # 단일 라인이 너무 긴 경우 강제 분할
+                    while len(line) > max_length:
+                        chunks.append(line[:max_length])
+                        line = line[max_length:]
+                    current_chunk = line
+        
+        # 마지막 청크 추가
+        if current_chunk:
+            chunks.append(current_chunk)
+        
+        api_logger.info(f"프롬프트를 {len(chunks)}개 청크로 분할 (각 청크 최대 {max_length}자)")
+        return chunks
+
+    async def _process_multi_chunk_analysis(self, filename: str, chunks: List[str]) -> str:
+        """다중 청크 파일 분석의 연속적 요약 처리"""
+        current_summary = None
+        
+        for i, chunk in enumerate(chunks):
+            api_logger.info(f"파일 '{filename}' 청크 {i+1}/{len(chunks)} 분석 시작")
+            sys.stdout.flush()
+            
+            # 첫 번째 청크가 아니면 이전 요약을 포함한 프롬프트 구성
+            if current_summary:
+                enhanced_prompt = f"""
+이전 분석 결과:
+{current_summary}
+
+위 분석을 바탕으로 다음 추가 정보를 분석하고 통합된 요약을 제공하세요:
+
+{chunk}
+
+**중요**: 이전 분석과 현재 정보를 종합하여 완전한 파일 분석을 제공하세요.
+"""
+            else:
+                enhanced_prompt = chunk
+            
+            # LLM 호출
+            chunk_summary = await self._call_llm_for_file_analysis(enhanced_prompt)
+            current_summary = chunk_summary  # 다음 청크에서 사용할 요약 업데이트
+            
+            api_logger.info(f"파일 '{filename}' 청크 {i+1}/{len(chunks)} 분석 완료")
+            sys.stdout.flush()
+        
+        api_logger.info(f"파일 '{filename}' 전체 다중 청크 분석 완료")
+        return current_summary
 
     async def _call_llm_for_file_analysis(self, prompt: str) -> str:
         """파일 전체 분석을 위한 LLM 호출"""
