@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     NOTION_API_VERSION: str = "2022-06-28"
     NOTION_CLIENT_ID: str
     NOTION_CLIENT_SECRET: str
+    NOTION_WEBHOOK_SECRET: str
 
     # Supabase 설정
     SUPABASE_URL: str
