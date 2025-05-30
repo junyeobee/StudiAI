@@ -5,6 +5,7 @@ from app.utils.logger import api_logger, webhook_logger
 import httpx
 from typing import Optional
 from app.models.notion_workspace import WorkspaceStatusUpdate, WorkspaceStatus, UserWorkspaceList, UserWorkspace
+from app.core.exceptions import DatabaseError
 
 async def insert_learning_database(db_id: str, title: str, parent_page_id: str, workspace_id: str, supabase: AsyncClient) -> bool:
     """새로운 학습 데이터베이스 등록"""
@@ -22,7 +23,7 @@ async def insert_learning_database(db_id: str, title: str, parent_page_id: str, 
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"데이터베이스 등록 실패: {str(e)}")
-        return False
+        raise DatabaseError(f"데이터베이스 등록 실패: {str(e)}")
 
 
 async def get_learning_database_by_title(title: str, supabase: AsyncClient, workspace_id: str) -> tuple:
@@ -35,7 +36,7 @@ async def get_learning_database_by_title(title: str, supabase: AsyncClient, work
         return None, None
     except Exception as e:
         api_logger.error(f"데이터베이스 조회 실패: {str(e)}")
-        return None, None
+        raise DatabaseError(f"데이터베이스 조회 실패: {str(e)}")
 
 async def get_active_learning_database(supabase: AsyncClient, workspace_id: str) -> dict:
     """현재 활성화된 학습 데이터베이스 조회"""
@@ -48,7 +49,7 @@ async def get_active_learning_database(supabase: AsyncClient, workspace_id: str)
         return None
     except Exception as e:
         api_logger.error(f"활성 데이터베이스 조회 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"활성 데이터베이스 조회 실패: {str(e)}")
 
 async def update_learning_database_status(db_id: Optional[str], status: str, supabase: AsyncClient, workspace_id: str) -> dict:
     """학습 데이터베이스 상태 업데이트"""
@@ -86,7 +87,7 @@ async def update_learning_database_status(db_id: Optional[str], status: str, sup
         
     except Exception as e:
         api_logger.error(f"DB 상태 업데이트 실패(db_id={db_id}, status={status}): {e}")
-        return None
+        raise DatabaseError(f"DB 상태 업데이트 실패(db_id={db_id}, status={status}): {e}")
 
 async def update_last_used_date(id: int, supabase: AsyncClient, workspace_id: str) -> bool:
     """마지막 사용일 업데이트"""
@@ -99,7 +100,7 @@ async def update_last_used_date(id: int, supabase: AsyncClient, workspace_id: st
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"마지막 사용일 업데이트 실패: {str(e)}")
-        return False
+        raise DatabaseError(f"마지막 사용일 업데이트 실패: {str(e)}")
 
 async def get_available_learning_databases(supabase: AsyncClient, workspace_id: str) -> list:
     """사용 가능한 학습 데이터베이스 목록 조회"""
@@ -108,7 +109,7 @@ async def get_available_learning_databases(supabase: AsyncClient, workspace_id: 
         return res.data if res and hasattr(res, 'data') else []
     except Exception as e:
         api_logger.error(f"사용 가능한 데이터베이스 조회 실패: {str(e)}")
-        return []
+        raise DatabaseError(f"사용 가능한 데이터베이스 조회 실패: {str(e)}")
 
 async def list_all_learning_databases(supabase: AsyncClient, workspace_id: str, status: str = None) -> list:
     """모든 학습 데이터베이스 목록 조회"""
@@ -120,7 +121,7 @@ async def list_all_learning_databases(supabase: AsyncClient, workspace_id: str, 
         return res.data if res and hasattr(res, 'data') else []
     except Exception as e:
         api_logger.error(f"데이터베이스 목록 조회 실패: {str(e)}")
-        return []
+        raise DatabaseError(f"데이터베이스 목록 조회 실패: {str(e)}")
 
 async def get_db_info_by_id(db_id: str, supabase: AsyncClient, workspace_id: str) -> dict:
     """데이터베이스 ID로 정보 조회"""
@@ -129,17 +130,21 @@ async def get_db_info_by_id(db_id: str, supabase: AsyncClient, workspace_id: str
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"데이터베이스 정보 조회 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"데이터베이스 정보 조회 실패: {str(e)}")
 
 # 현재 사용중인 Notion DB ID 조회
 async def get_used_notion_db_id(supabase: AsyncClient, workspace_id: str) -> str | None:
     """현재 사용중인 Notion DB ID 조회"""
-    res = await supabase.table("learning_databases") \
-        .select("db_id") \
-        .eq("status", "used") \
-        .eq("workspace_id", workspace_id) \
-        .execute()
-    return res.data[0]["db_id"] if res.data else None
+    try: 
+        res = await supabase.table("learning_databases") \
+            .select("db_id") \
+            .eq("status", "used") \
+            .eq("workspace_id", workspace_id) \
+            .execute()  
+        return res.data[0]["db_id"] if res.data else None
+    except Exception as e:
+        api_logger.error(f"현재 사용중인 Notion DB ID 조회 실패: {str(e)}")
+        raise DatabaseError(f"현재 사용중인 Notion DB ID 조회 실패: {str(e)}")
 
 async def update_webhook_info(db_id: str, webhook_id: str, supabase: AsyncClient, status: str = "active") -> dict:
     """웹훅 정보 업데이트"""
@@ -157,7 +162,7 @@ async def update_webhook_info(db_id: str, webhook_id: str, supabase: AsyncClient
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"웹훅 정보 업데이트 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"웹훅 정보 업데이트 실패: {str(e)}")
 
 async def get_webhook_info(db_id: str, supabase: AsyncClient) -> dict:
     """웹훅 정보 조회"""
@@ -166,7 +171,7 @@ async def get_webhook_info(db_id: str, supabase: AsyncClient) -> dict:
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"웹훅 정보 조회 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"웹훅 정보 조회 실패: {str(e)}")
 
 async def get_webhook_info_by_db_id(db_id: str, supabase: AsyncClient) -> dict:
     """DB ID로 웹훅 정보를 조회"""
@@ -175,7 +180,7 @@ async def get_webhook_info_by_db_id(db_id: str, supabase: AsyncClient) -> dict:
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"웹훅 정보 조회 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"웹훅 정보 조회 실패: {str(e)}")
 
 async def log_webhook_operation(db_id: str, operation_type: str, status: str, supabase: AsyncClient, error_message: str = None, webhook_id: str = None) -> bool:
     """웹훅 작업 로그 기록"""
@@ -192,7 +197,7 @@ async def log_webhook_operation(db_id: str, operation_type: str, status: str, su
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"웹훅 작업 로그 기록 실패: {str(e)}")
-        return False
+        raise DatabaseError(f"웹훅 작업 로그 기록 실패: {str(e)}")
 
 async def insert_learning_page(date: str, title: str, page_id: str, ai_block_id: str, learning_db_id: str, supabase: AsyncClient) -> bool:
     """학습 페이지 저장"""
@@ -208,7 +213,7 @@ async def insert_learning_page(date: str, title: str, page_id: str, ai_block_id:
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"학습 페이지 저장 실패: {str(e)}")
-        return False
+        raise DatabaseError(f"학습 페이지 저장 실패: {str(e)}")
 
 async def get_learning_page_by_date(date: str, user_id: str, supabase: AsyncClient) -> dict:
     """날짜별 학습 페이지 조회"""
@@ -217,7 +222,7 @@ async def get_learning_page_by_date(date: str, user_id: str, supabase: AsyncClie
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"학습 페이지 조회 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"학습 페이지 조회 실패: {str(e)}")
 
 async def update_ai_block_id(page_id: str, new_ai_block_id: str, user_id: str, supabase: AsyncClient) -> bool:
     """AI 블록 ID 업데이트"""
@@ -226,7 +231,7 @@ async def update_ai_block_id(page_id: str, new_ai_block_id: str, user_id: str, s
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"AI 블록 ID 업데이트 실패: {str(e)}")
-        return False
+        raise DatabaseError(f"AI 블록 ID 업데이트 실패: {str(e)}")
 
 async def get_ai_block_id_by_page_id(page_id: str, user_id: str, supabase: AsyncClient) -> str:
     """페이지 ID로 AI 블록 ID 조회"""
@@ -238,7 +243,7 @@ async def get_ai_block_id_by_page_id(page_id: str, user_id: str, supabase: Async
         return None
     except Exception as e:
         api_logger.error(f"AI 블록 ID 조회 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"AI 블록 ID 조회 실패: {str(e)}")
 
 async def get_failed_webhook_operations(supabase: AsyncClient, limit: int = 10) -> list:
     """실패한 웹훅 작업 조회"""
@@ -253,7 +258,7 @@ async def get_failed_webhook_operations(supabase: AsyncClient, limit: int = 10) 
         return res.data if res and hasattr(res, 'data') else []
     except Exception as e:
         api_logger.error(f"실패한 웹훅 작업 조회 실패: {str(e)}")
-        return []
+        raise DatabaseError(f"실패한 웹훅 작업 조회 실패: {str(e)}")
 
 async def update_webhook_operation_status(operation_id: int, status: str, supabase: AsyncClient, error_message: str = None) -> bool:
     """웹훅 작업 상태 업데이트"""
@@ -283,7 +288,7 @@ async def update_webhook_operation_status(operation_id: int, status: str, supaba
         return bool(res.data)
     except Exception as e:
         api_logger.error(f"웹훅 작업 상태 업데이트 실패: {str(e)}")
-        return False
+        raise DatabaseError(f"웹훅 작업 상태 업데이트 실패: {str(e)}")
 
 async def verify_all_webhooks(supabase: AsyncClient) -> dict:
     """모든 활성 웹훅의 상태를 검증"""
@@ -348,12 +353,7 @@ async def verify_all_webhooks(supabase: AsyncClient) -> dict:
         
     except Exception as e:
         webhook_logger.error(f"Error in verify_all_webhooks: {str(e)}")
-        return {
-            "total": 0,
-            "verified": 0,
-            "failed": 0,
-            "errors": [str(e)]
-        }
+        raise DatabaseError(f"Error in verify_all_webhooks: {str(e)}")
 
 async def retry_failed_webhook_operations(supabase: AsyncClient) -> dict:
     """실패한 웹훅 작업을 재시도"""
@@ -445,12 +445,7 @@ async def retry_failed_webhook_operations(supabase: AsyncClient) -> dict:
         
     except Exception as e:
         webhook_logger.error(f"Error in retry_failed_webhook_operations: {str(e)}")
-        return {
-            "total": 0,
-            "retried": 0,
-            "failed": 0,
-            "errors": [str(e)]
-        }
+        raise DatabaseError(f"Error in retry_failed_webhook_operations: {str(e)}")
 
 async def get_databases_in_page(page_id: str, supabase: AsyncClient) -> list:
     """특정 Notion 페이지 내의 모든 데이터베이스를 조회"""
@@ -484,10 +479,10 @@ async def get_databases_in_page(page_id: str, supabase: AsyncClient) -> list:
             
     except httpx.HTTPError as e:
         api_logger.error(f"HTTP error while fetching databases: {str(e)}")
-        return []
+        raise DatabaseError(f"HTTP error while fetching databases: {str(e)}")
     except Exception as e:
         api_logger.error(f"Error fetching databases: {str(e)}")
-        return []
+        raise DatabaseError(f"Error fetching databases: {str(e)}")
 
 async def activate_database(db_id: str, supabase: AsyncClient) -> bool:
     """데이터베이스를 활성화"""
@@ -500,7 +495,7 @@ async def activate_database(db_id: str, supabase: AsyncClient) -> bool:
         return True
     except Exception as e:
         api_logger.error(f"Error activating database: {str(e)}")
-        return False
+        raise DatabaseError(f"Error activating database: {str(e)}")
 
 async def deactivate_database(db_id: str, supabase: AsyncClient, end_status: bool = False) -> bool:
     """데이터베이스를 비활성화"""
@@ -510,7 +505,7 @@ async def deactivate_database(db_id: str, supabase: AsyncClient, end_status: boo
         return True
     except Exception as e:
         api_logger.error(f"Error deactivating database: {str(e)}")
-        return False
+        raise DatabaseError(f"Error deactivating database: {str(e)}")
 
 async def update_learning_database(db_id: str, update_data: dict, supabase: AsyncClient) -> dict:
     """학습 DB 정보 업데이트"""
@@ -520,7 +515,7 @@ async def update_learning_database(db_id: str, update_data: dict, supabase: Asyn
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"DB 업데이트 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"DB 업데이트 실패: {str(e)}")
     
 async def delete_learning_page(page_id: str, supabase: AsyncClient) -> None:
     """학습 페이지 삭제"""
@@ -528,7 +523,7 @@ async def delete_learning_page(page_id: str, supabase: AsyncClient) -> None:
         await supabase.table("learning_pages").delete().eq("page_id", page_id).execute()
     except Exception as e:
         api_logger.error(f"학습 페이지 메타 삭제 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"학습 페이지 메타 삭제 실패: {str(e)}")
 
 async def auth_user(user_id:str, auth_token:str, supabase: AsyncClient) -> dict:
     """유저 인증"""
@@ -537,7 +532,7 @@ async def auth_user(user_id:str, auth_token:str, supabase: AsyncClient) -> dict:
         return res.data
     except Exception as e:
         api_logger.error(f"유저 인증 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"유저 인증 실패: {str(e)}")
 
 async def get_default_workspace(user_id: str, supabase: AsyncClient) -> Optional[str]:
     """기본(active) 워크스페이스 조회"""
@@ -548,7 +543,7 @@ async def get_default_workspace(user_id: str, supabase: AsyncClient) -> Optional
         return None
     except Exception as e:
         api_logger.error(f"기본 워크스페이스 조회 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"기본 워크스페이스 조회 실패: {str(e)}")
 
 async def switch_active_workspace(WorkspaceStatusUpdate:WorkspaceStatusUpdate, supabase: AsyncClient) -> dict:
     """활성 워크스페이스 변경, 기존 워크스페이스 비활성화 한 후 새로운 워크스페이스 활성화, 이전 workspace의 used(사용중인)db도 비활성화 -> RPC 트랜잭션 사용"""
@@ -561,7 +556,7 @@ async def switch_active_workspace(WorkspaceStatusUpdate:WorkspaceStatusUpdate, s
         return result.data
     except Exception as e:
         api_logger.error(f"워크스페이스 활성화 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"워크스페이스 활성화 실패: {str(e)}")
     
 async def deactivate_all_workspaces(user_id: str, supabase: AsyncClient) -> dict:
     """유저의 모든 워크스페이스 비활성화, 이전 workspace의 used(사용중인)db도 비활성화 -> RPC 트랜잭션 사용"""
@@ -574,7 +569,7 @@ async def deactivate_all_workspaces(user_id: str, supabase: AsyncClient) -> dict
         return result.data
     except Exception as e:
         api_logger.error(f"워크스페이스 비활성화 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"워크스페이스 비활성화 실패: {str(e)}")
 
 async def get_workspaces(user_id: str, supabase: AsyncClient) -> UserWorkspaceList:
     """유저의 모든 워크스페이스 조회"""
@@ -583,7 +578,7 @@ async def get_workspaces(user_id: str, supabase: AsyncClient) -> UserWorkspaceLi
         return UserWorkspaceList(workspaces=res.data)
     except Exception as e:
         api_logger.error(f"워크스페이스 조회 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"워크스페이스 조회 실패: {str(e)}")
 
 async def set_workspaces(workspaces: list[UserWorkspace], supabase: AsyncClient) -> dict:
     """유저의 워크스페이스 설정 (upsert 사용)"""
@@ -600,22 +595,59 @@ async def set_workspaces(workspaces: list[UserWorkspace], supabase: AsyncClient)
         return res.data
     except Exception as e:
         api_logger.error(f"워크스페이스 설정 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"워크스페이스 설정 실패: {str(e)}")
     
 async def get_github_pat(db_id, supabase):
-    res = await supabase.table("user_integrations")\
-        .select("access_token")\
-        .eq("provider","github").single().execute()
-    return res.data["access_token"]
-
+    try: 
+        res = await supabase.table("user_integrations")\
+            .select("access_token")\
+            .eq("provider","github").single().execute()
+        return res.data["access_token"]
+    except Exception as e:
+        api_logger.error(f"Github PAT 조회 실패: {str(e)}")
+        raise DatabaseError(f"Github PAT 조회 실패: {str(e)}")
 
 async def get_active_webhooks(owner: str, repo: str, supabase: AsyncClient):
     """활성 웹훅 정보 조회"""
-    res = await supabase.table("db_webhooks") \
-        .select("secret, learning_db_id, created_by") \
-        .eq("repo_owner", owner) \
-        .eq("repo_name", repo) \
-        .eq("status", "active") \
-        .execute()
+    try : 
+        res = await supabase.table("db_webhooks") \
+            .select("secret, learning_db_id, created_by") \
+            .eq("repo_owner", owner) \
+            .eq("repo_name", repo) \
+            .eq("status", "active") \
+            .execute()
         
-    return res
+        return res  
+    except Exception as e:
+        api_logger.error(f"활성 웹훅 정보 조회 실패: {str(e)}")
+        raise DatabaseError(f"활성 웹훅 정보 조회 실패: {str(e)}")
+
+# 웹훅 관련 함수들 추가
+async def delete_learning_page_by_system_id(system_id: str, supabase: AsyncClient) -> bool:
+    """시스템 UUID로 학습 페이지 삭제"""
+    try:
+        delete_result = await supabase.table("learning_pages").delete().eq("id", system_id).execute()
+        return bool(delete_result.data)
+    except Exception as e:
+        api_logger.error(f"학습 페이지 삭제 실패 (시스템 ID: {system_id}): {str(e)}")
+        raise DatabaseError(f"학습 페이지 삭제 실패 (시스템 ID: {system_id}): {str(e)}")
+
+async def clear_ai_block_id(system_id: str, supabase: AsyncClient) -> bool:
+    """시스템 UUID로 AI 블록 ID를 NULL로 업데이트"""
+    try:
+        update_result = await supabase.table("learning_pages").update({
+            "ai_block_id": None
+        }).eq("id", system_id).execute()
+        return bool(update_result.data)
+    except Exception as e:
+        api_logger.error(f"AI 블록 ID 초기화 실패 (시스템 ID: {system_id}): {str(e)}")
+        raise DatabaseError(f"AI 블록 ID 초기화 실패 (시스템 ID: {system_id}): {str(e)}")
+
+async def delete_learning_database_by_system_id(system_id: str, supabase: AsyncClient) -> bool:
+    """시스템 UUID로 학습 데이터베이스 삭제"""
+    try:
+        db_delete_result = await supabase.table("learning_databases").delete().eq("id", system_id).execute()
+        return bool(db_delete_result.data)
+    except Exception as e:
+        api_logger.error(f"학습 데이터베이스 삭제 실패 (시스템 ID: {system_id}): {str(e)}")
+        raise DatabaseError(f"학습 데이터베이스 삭제 실패 (시스템 ID: {system_id}): {str(e)}")

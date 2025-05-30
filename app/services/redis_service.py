@@ -232,3 +232,42 @@ class RedisService:
         redis_key = f"user:{user_id}:default_db"
         cached_result = redis_client.get(redis_key)
         return cached_result
+
+    async def get_json(self, key: str, redis_client: redis.Redis) -> dict:
+        """
+        JSON 데이터를 Redis에서 가져옴
+        """
+        try:
+            data = redis_client.get(key)
+            if data:
+                return json.loads(data)
+            return None
+        except Exception as e:
+            self.logger.error(f"JSON 데이터 조회 실패 (key: {key}): {str(e)}")
+            return None
+
+    async def set_json(self, key: str, data: dict, redis_client: redis.Redis, expire_seconds: int = None) -> bool:
+        """
+        JSON 데이터를 Redis에 저장
+        """
+        try:
+            json_data = json.dumps(data)
+            if expire_seconds:
+                result = redis_client.set(key, json_data, ex=expire_seconds)
+            else:
+                result = redis_client.set(key, json_data)
+            return result
+        except Exception as e:
+            self.logger.error(f"JSON 데이터 저장 실패 (key: {key}): {str(e)}")
+            return False
+
+    async def delete_key(self, key: str, redis_client: redis.Redis) -> bool:
+        """
+        Redis 키 삭제
+        """
+        try:
+            result = redis_client.delete(key)
+            return result > 0
+        except Exception as e:
+            self.logger.error(f"키 삭제 실패 (key: {key}): {str(e)}")
+            return False

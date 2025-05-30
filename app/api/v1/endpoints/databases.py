@@ -131,6 +131,12 @@ async def create_database(db: DatabaseCreate, user_id: str = Depends(require_use
             supabase=supabase,
             workspace_id=workspace_id
         )
+        
+        # 워크스페이스 캐시 무효화 (새로운 DB가 추가되었으므로)
+        cache_key = f"workspace:{workspace_id}:learning_data"
+        await redis_service.delete_key(cache_key, redis)
+        api_logger.info(f"새 DB 생성으로 워크스페이스 캐시 무효화: {workspace_id}")
+        
         return DatabaseResponse(
             status="success",
             data=database,

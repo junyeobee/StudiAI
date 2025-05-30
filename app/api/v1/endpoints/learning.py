@@ -69,11 +69,14 @@ async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:st
         raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
-async def create_pages(req: LearningPagesRequest, pages: list = Depends(get_notion_db_list), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def create_pages(req: LearningPagesRequest, pages: list = Depends(get_notion_db_list), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), user_id: str = Depends(require_user), redis = Depends(get_redis)):
     notion_db_id = req.notion_db_id
     if notion_db_id not in pages:
         raise HTTPException(400, "학습 페이지 생성 실패: 유효한 DB가 아닙니다.")
     results = []
+    
+    # 워크스페이스 ID 조회 (캐시 무효화용)
+    workspace_id = await redis_service.get_user_workspace(user_id, redis)
 
     for plan in req.plans:
         try:
@@ -94,6 +97,12 @@ async def create_pages(req: LearningPagesRequest, pages: list = Depends(get_noti
         except Exception as e:
             api_logger.error(f"학습 페이지 생성 실패: {str(e)}")
             results.append({"error": str(e), "plan": plan.model_dump()})
+
+    # 새 페이지가 생성되었으므로 워크스페이스 캐시 무효화
+    if workspace_id and any(result.get("saved") for result in results):
+        cache_key = f"workspace:{workspace_id}:learning_data"
+        await redis_service.delete_key(cache_key, redis)
+        api_logger.info(f"새 페이지 생성으로 워크스페이스 캐시 무효화: {workspace_id}")
 
     return {
         "status": "completed",
@@ -140,10 +149,20 @@ async def get_content(page_id: str, notion_service: NotionService = Depends(get_
 
 # 페이지 삭제
 @router.delete("/pages/{page_id}")
-async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), user_id: str = Depends(require_user), redis = Depends(get_redis)):
     try:
+        # 워크스페이스 ID 조회 (캐시 무효화용)
+        workspace_id = await redis_service.get_user_workspace(user_id, redis)
+        
         await notion_service.delete_page(page_id)
         await delete_learning_page(page_id, supabase)
+        
+        # 페이지가 삭제되었으므로 워크스페이스 캐시 무효화
+        if workspace_id:
+            cache_key = f"workspace:{workspace_id}:learning_data"
+            await redis_service.delete_key(cache_key, redis)
+            api_logger.info(f"페이지 삭제로 워크스페이스 캐시 무효화: {workspace_id}")
+        
         return {"status": "deleted", "page_id": page_id}
     except Exception as e:
         api_logger.error(f"학습 페이지 삭제 실패: {str(e)}")
