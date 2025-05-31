@@ -3,7 +3,7 @@ import asyncio
 import os
 import sys
 from typing import Dict, List
-from rq import Queue, SimpleWorker, Worker, SpawnWorker
+from rq import Queue, SimpleWorker, Worker, SpawnWorker, get_current_job
 from rq.timeouts import TimerDeathPenalty
 from app.services.code_analysis_service import CodeAnalysisService
 from app.core.config import settings
@@ -118,6 +118,10 @@ async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_s
         analysis_service = CodeAnalysisService(redis_conn, supabase)
         
         api_logger.info(f"분석 대상: {len(files)}개 파일, 커밋: {commit_sha[:8]}")
+        
+        # ✅ 로컬 LLM 환경에 맞춰 타임아웃 연장 (5분 → 30분)
+        job = get_current_job()
+        job.timeout = 1800  # 30분
         
         # 1. 변경된 파일들을 함수 단위로 분해하고 큐에 추가
         await analysis_service.analyze_code_changes(files, owner, repo, commit_sha, user_id)

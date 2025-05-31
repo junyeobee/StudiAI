@@ -620,7 +620,7 @@ class CodeAnalysisService:
                         {"role": "system", "content": "당신은 코드 분석 전문가입니다. 주어진 함수를 분석하여 명확하고 유용한 정보를 제공하세요."},
                         {"role": "user", "content": full_prompt}
                     ],
-                    timeout=120  # ✅ Step 6: LLM 내부 타임아웃 (함수: 30초)
+                    timeout=300  # ✅ Step 6: LLM 내부 타임아웃 (함수: 150초, 로컬 LLM 최적화)
                 )
                 
                 return response.choices[0].message.content
@@ -636,18 +636,18 @@ class CodeAnalysisService:
             # ✅ Step 5: 공유 ThreadPoolExecutor 사용
             executor = await self._get_shared_executor()
             
-            # ✅ Step 6: 이중 타임아웃 (LLM 30초 + asyncio 35초)
+            # ✅ Step 6: 이중 타임아웃 (LLM 150초 + asyncio 180초, 로컬 LLM 최적화)
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(executor, _sync_llm_call),
-                timeout=120  # ✅ Step 6: 외부 타임아웃 (35초)
+                timeout=360  # ✅ Step 6: 외부 타임아웃 (180초, 로컬 LLM 최적화)
             )
             
             api_logger.info(f"함수 '{func_info['name']}' LLM 분석 완료")
             return result
             
         except asyncio.TimeoutError:
-            api_logger.error(f"함수 '{func_info['name']}' LLM 호출 타임아웃 (35초)")
+            api_logger.error(f"함수 '{func_info['name']}' LLM 호출 타임아웃 (180초)")
             return f"**기능 요약**: {func_info['name']} 함수\n**분석 상태**: 타임아웃으로 인한 분석 실패"
         except Exception as e:
             api_logger.error(f"비동기 LLM 호출 실패: {e}")
@@ -1012,13 +1012,13 @@ class CodeAnalysisService:
                         {"role": "system", "content": "당신은 소프트웨어 아키텍처 전문가입니다. 파일 전체의 구조와 흐름을 분석하여 개선 방안을 제시하세요."},
                         {"role": "user", "content": prompt}
                     ],
-                    timeout=125  # ✅ Step 6: LLM 내부 타임아웃 (파일: 60초)
+                    timeout=240  # ✅ Step 6: LLM 내부 타임아웃 (파일: 240초, 로컬 LLM 최적화)
                 )
                 
                 return response.choices[0].message.content
                 
             except Exception as e:
-                api_logger.error(f"파일 분석 LLM 호출 실패(동기 단계): {e}")
+                api_logger.error(f"LLM 호출 실패(동기 단계): {e}")
                 api_logger.error(traceback.format_exc())
                 return f"""
 ## 🏛️ 아키텍처 분석
@@ -1037,24 +1037,24 @@ LLM 호출 오류: {e}
             # ✅ Step 5: 공유 ThreadPoolExecutor 사용
             executor = await self._get_shared_executor()
             
-            # ✅ Step 6: 이중 타임아웃 (LLM 60초 + asyncio 65초)
+            # ✅ Step 6: 이중 타임아웃 (LLM 240초 + asyncio 300초, 로컬 LLM 최적화)
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(executor, _sync_file_analysis_call),
-                timeout=120  # ✅ Step 6: 외부 타임아웃 (65초)
+                timeout=360  # ✅ Step 6: 외부 타임아웃 (300초, 로컬 LLM 최적화)
             )
             
             api_logger.info("파일 전체 분석 LLM 호출 완료")
             return result
             
         except asyncio.TimeoutError:
-            api_logger.error("파일 분석 LLM 호출 타임아웃 (65초)")
+            api_logger.error(f"함수 '{func_info['name']}' LLM 호출 타임아웃 (300초)")
             return """
 ## 🏛️ 아키텍처 분석
 타임아웃으로 인한 분석 실패
 
 ## 📝 분석 상태
-LLM 호출 타임아웃 (65초)
+LLM 호출 타임아웃 (300초)
 
 ## 🔧 해결 방안
 로컬 LLM 서버 상태를 확인하세요.

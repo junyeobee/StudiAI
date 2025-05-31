@@ -244,10 +244,10 @@ class TestCodeAnalysisService:
                         # When
                         await service._call_llm_for_function(func_info, 'test code', {})
                         
-                        # Then: 외부 타임아웃 35초 확인
+                        # Then: 외부 타임아웃 180초 확인 (로컬 LLM 최적화)
                         mock_wait_for.assert_called_once()
                         args, kwargs = mock_wait_for.call_args
-                        assert kwargs['timeout'] == 35
+                        assert kwargs['timeout'] == 360  # 180초 → 360초로 업데이트
                         
                         # run_in_executor 호출 확인
                         mock_loop.return_value.run_in_executor.assert_called_once()
