@@ -620,7 +620,7 @@ class CodeAnalysisService:
                         {"role": "system", "content": "당신은 코드 분석 전문가입니다. 주어진 함수를 분석하여 명확하고 유용한 정보를 제공하세요."},
                         {"role": "user", "content": full_prompt}
                     ],
-                    timeout=30  # ✅ Step 6: LLM 내부 타임아웃 (함수: 30초)
+                    timeout=120  # ✅ Step 6: LLM 내부 타임아웃 (함수: 30초)
                 )
                 
                 return response.choices[0].message.content
@@ -640,7 +640,7 @@ class CodeAnalysisService:
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(executor, _sync_llm_call),
-                timeout=35  # ✅ Step 6: 외부 타임아웃 (35초)
+                timeout=120  # ✅ Step 6: 외부 타임아웃 (35초)
             )
             
             api_logger.info(f"함수 '{func_info['name']}' LLM 분석 완료")
@@ -1012,7 +1012,7 @@ class CodeAnalysisService:
                         {"role": "system", "content": "당신은 소프트웨어 아키텍처 전문가입니다. 파일 전체의 구조와 흐름을 분석하여 개선 방안을 제시하세요."},
                         {"role": "user", "content": prompt}
                     ],
-                    timeout=60  # ✅ Step 6: LLM 내부 타임아웃 (파일: 60초)
+                    timeout=125  # ✅ Step 6: LLM 내부 타임아웃 (파일: 60초)
                 )
                 
                 return response.choices[0].message.content
@@ -1041,7 +1041,7 @@ LLM 호출 오류: {e}
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(executor, _sync_file_analysis_call),
-                timeout=65  # ✅ Step 6: 외부 타임아웃 (65초)
+                timeout=120  # ✅ Step 6: 외부 타임아웃 (65초)
             )
             
             api_logger.info("파일 전체 분석 LLM 호출 완료")
@@ -1080,7 +1080,7 @@ LLM 호출 오류: {e}
             sys.stdout.flush()
             
             # 1. 함수별 분석 결과 수집
-            func_summaries = self._collect_function_summaries(user_id, filename, commit_sha)
+            func_summaries = await self._collect_function_summaries(user_id, filename, commit_sha)
             
             # 2. 분석 요약 구성
             analysis_summary = self._build_analysis_summary(filename, file_summary, func_summaries)
