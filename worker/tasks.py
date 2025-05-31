@@ -58,11 +58,11 @@ def create_redis_connection():
 # Redis 연결
 redis_conn = create_redis_connection()
 
-# RQ 큐 생성 (설정 적용)
+# RQ 큐 생성 (로컬 LLM 환경에 맞춰 30분 타임아웃)
 task_queue = Queue(
     'code_analysis', 
     connection=redis_conn,
-    default_timeout=RQ_CONFIG['worker']['timeout']
+    default_timeout=1800  # 30분 (로컬 LLM 환경 최적화)
 )
 
 def analyze_code_task(files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
@@ -119,10 +119,6 @@ async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_s
         
         api_logger.info(f"분석 대상: {len(files)}개 파일, 커밋: {commit_sha[:8]}")
         
-        # ✅ 로컬 LLM 환경에 맞춰 타임아웃 연장 (5분 → 30분)
-        job = get_current_job()
-        job.timeout = 1800  # 30분
-        
         # 1. 변경된 파일들을 함수 단위로 분해하고 큐에 추가
         await analysis_service.analyze_code_changes(files, owner, repo, commit_sha, user_id)
         
@@ -166,6 +162,10 @@ def create_optimized_worker():
             exception_handlers=[handle_failed_job]
         )
         api_logger.info("Unix/Linux Worker 생성")
+    
+    # ✅ Worker 생성 후 속성으로 타임아웃 설정 (30분, 로컬 LLM 환경 최적화)
+    worker.job_timeout = 1800
+    api_logger.info("Worker job_timeout 설정 완료: 1800초 (30분)")
     
     # 워커 설정 적용
     worker.default_result_ttl = worker_config['result_ttl']

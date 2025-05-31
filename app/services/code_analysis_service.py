@@ -1022,13 +1022,10 @@ class CodeAnalysisService:
                 api_logger.error(traceback.format_exc())
                 return f"""
 ## 🏛️ 아키텍처 분석
-LLM 분석 실패로 인한 기본 응답
+타임아웃으로 인한 분석 실패
 
 ## 📝 분석 상태
-LLM 호출 오류: {e}
-
-## 🔧 해결 방안
-로컬 LLM 서버 상태를 확인하세요.
+LLM 호출 타임아웃 (300초)
 """
         
         try:
@@ -1048,16 +1045,13 @@ LLM 호출 오류: {e}
             return result
             
         except asyncio.TimeoutError:
-            api_logger.error(f"함수 '{func_info['name']}' LLM 호출 타임아웃 (300초)")
-            return """
+            api_logger.error("파일 분석 LLM 호출 타임아웃 (300초)")
+            return f"""
 ## 🏛️ 아키텍처 분석
 타임아웃으로 인한 분석 실패
 
 ## 📝 분석 상태
 LLM 호출 타임아웃 (300초)
-
-## 🔧 해결 방안
-로컬 LLM 서버 상태를 확인하세요.
 """
         except Exception as e:
             api_logger.error(f"비동기 파일 분석 LLM 호출 실패: {e}")
