@@ -2,7 +2,7 @@
 API 라우터 통합
 """
 from fastapi import APIRouter
-from app.api.v1.endpoints import databases, webhooks, learning, auth, notion_setting, github_webhook, worker, notion_webhook
+from app.api.v1.endpoints import databases, webhooks, learning, auth, notion_setting, github_webhook, worker, notion_webhook, health
 
 api_router = APIRouter()
 public_router = APIRouter()
@@ -62,6 +62,13 @@ api_router.include_router(
     worker.router,
     prefix="/worker",
     tags=["worker"]
+)
+
+# ✅ 헬스체크 엔드포인트 등록 (인증 불필요)
+public_router.include_router(
+    health.router,
+    prefix="/health",
+    tags=["health"]
 )
 
 public_router.include_router(

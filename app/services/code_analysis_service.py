@@ -14,21 +14,159 @@ from app.services.redis_service import RedisService
 from app.services.extract_for_file_service import extract_functions_by_type
 from app.services.notion_service import NotionService
 from app.services.auth_service import get_integration_token
+import uuid
+import traceback
 # 버퍼링 비활성화
 os.environ["PYTHONUNBUFFERED"] = "1"
+import concurrent.futures
 
 class CodeAnalysisService:
-    """함수 중심 코드 분석 및 LLM 처리 서비스"""
+    """함수 중심 코드 분석 및 LLM 처리 서비스 - 24/7 운영 최적화 버전"""
+    
+    # ✅ Step 5: 공유 ThreadPoolExecutor 클래스 변수
+    _shared_executor: Optional[concurrent.futures.ThreadPoolExecutor] = None
+    _executor_lock = asyncio.Lock()
+    
     def __init__(self, redis_client: Redis, supabase: AsyncClient):
         self.redis_client = redis_client
         self.redis_service = RedisService()
         self.supabase = supabase
         self.function_queue = asyncio.Queue()
     
+    # ✅ Step 5: 공유 ThreadPoolExecutor 관리 메서드들
+    @classmethod
+    async def _get_shared_executor(cls) -> concurrent.futures.ThreadPoolExecutor:
+        """공유 ThreadPoolExecutor 반환 (지연 초기화, 이중 체크 잠금)"""
+        if cls._shared_executor is None:
+            async with cls._executor_lock:
+                if cls._shared_executor is None:
+                    cls._shared_executor = concurrent.futures.ThreadPoolExecutor(
+                        max_workers=4,
+                        thread_name_prefix="llm_worker"
+                    )
+                    api_logger.info("공유 ThreadPoolExecutor 생성 완료 (max_workers=4)")
+        return cls._shared_executor
+    
+    @classmethod
+    async def cleanup_executor(cls):
+        """서비스 종료시 ThreadPool 정리"""
+        if cls._shared_executor:
+            cls._shared_executor.shutdown(wait=True)
+            cls._shared_executor = None
+            api_logger.info("공유 ThreadPoolExecutor 종료 완료")
+    
+    # ✅ Step 3: Hash 기반 함수 요약 저장 메서드
+    async def _save_function_summary_to_hash(self, user_id: str, commit_sha: str, 
+                                           filename: str, func_name: str, summary: str):
+        """함수 요약을 Hash 형태로 저장 (원자적 업데이트)"""
+        file_key = f"{user_id}:func:{commit_sha}:{filename}"
+        
+        def _sync_hash_save():
+            try:
+                self.redis_client.hset(file_key, func_name, summary)
+                self.redis_client.expire(file_key, 86400 * 7)  # 7일 보관
+                return True
+            except Exception as e:
+                api_logger.error(f"Redis Hash 저장 실패 ({func_name}): {e}")
+                api_logger.error(traceback.format_exc())
+                raise
+        
+        try:
+            executor = await self._get_shared_executor()
+            await asyncio.get_event_loop().run_in_executor(executor, _sync_hash_save)
+            api_logger.info(f"함수 요약 Hash 저장 완료: {func_name} → {file_key}")
+            
+        except Exception as e:
+            api_logger.error(f"함수 요약 저장 실패 ({func_name}): {e}")
+            api_logger.error(traceback.format_exc())
+            raise
+    
+    # ✅ Step 3: Hash에서 함수별 분석 결과 수집 (keys() 제거)
+    async def _collect_function_summaries(self, user_id: str, filename: str, commit_sha: str) -> Dict[str, str]:
+        """Hash에서 함수별 분석 결과 수집 (O(1) 조회)"""
+        file_key = f"{user_id}:func:{commit_sha}:{filename}"
+        
+        def _sync_hash_collect():
+            try:
+                summaries_hash = self.redis_client.hgetall(file_key)
+                func_summaries = {}
+                for func_name_bytes, summary_bytes in summaries_hash.items():
+                    func_name = func_name_bytes.decode('utf-8') if isinstance(func_name_bytes, bytes) else func_name_bytes
+                    summary = summary_bytes.decode('utf-8') if isinstance(summary_bytes, bytes) else summary_bytes
+                    func_summaries[func_name] = summary
+                return func_summaries
+            except Exception as e:
+                api_logger.error(f"Redis Hash 수집 실패 ({filename}): {e}")
+                api_logger.error(traceback.format_exc())
+                return {}
+        
+        try:
+            executor = await self._get_shared_executor()
+            func_summaries = await asyncio.get_event_loop().run_in_executor(executor, _sync_hash_collect)
+            
+            api_logger.info(f"파일 '{filename}': {len(func_summaries)}개 함수 분석 결과 수집 (커밋: {commit_sha[:8]})")
+            return func_summaries
+            
+        except Exception as e:
+            api_logger.error(f"함수 요약 수집 실패 ({filename}): {e}")
+            api_logger.error(traceback.format_exc())
+            return {}
+    
+    # ✅ Step 2,4: Redis 카운터 기반 pending 관리 (I/O 오프로드)
+    async def _increment_pending_count(self, user_id: str, commit_sha: str, filename: str):
+        """파일의 대기 중인 함수 수 증가 (commit_sha 포함, I/O 오프로드)"""
+        counter_key = f"{user_id}:pending:{commit_sha}:{filename}"
+        
+        def _sync_incr():
+            try:
+                pipe = self.redis_client.pipeline()
+                pipe.incr(counter_key)
+                pipe.expire(counter_key, 3600 * 3)  # 3시간 TTL
+                pipe.execute()
+            except Exception as e:
+                api_logger.error(f"Redis pending 증가 실패: {e}")
+                api_logger.error(traceback.format_exc())
+                raise
+        
+        try:
+            executor = await self._get_shared_executor()
+            await asyncio.get_event_loop().run_in_executor(executor, _sync_incr)
+            api_logger.debug(f"pending 카운터 증가: {counter_key}")
+        except Exception as e:
+            api_logger.error(f"pending 카운터 증가 실패: {e}")
+            api_logger.error(traceback.format_exc())
+            raise
+    
+    async def _decrement_pending_count(self, user_id: str, commit_sha: str, filename: str) -> int:
+        """파일의 대기 중인 함수 수 감소 후 남은 수 반환 (I/O 오프로드)"""
+        counter_key = f"{user_id}:pending:{commit_sha}:{filename}"
+        
+        def _sync_decr():
+            try:
+                remaining = self.redis_client.decr(counter_key)
+                if remaining <= 0:
+                    self.redis_client.delete(counter_key)
+                    return 0
+                return remaining
+            except Exception as e:
+                api_logger.error(f"Redis pending 감소 실패: {e}")
+                api_logger.error(traceback.format_exc())
+                return 0
+        
+        try:
+            executor = await self._get_shared_executor()
+            remaining = await asyncio.get_event_loop().run_in_executor(executor, _sync_decr)
+            api_logger.debug(f"pending 카운터 감소: {counter_key} → {remaining}")
+            return remaining
+            
+        except Exception as e:
+            api_logger.error(f"pending 카운터 감소 실패: {e}")
+            api_logger.error(traceback.format_exc())
+            return 0
+
     async def analyze_code_changes(self, files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
-        """코드 변경 분석 처리"""
+        """코드 변경 분석 처리 → 자동 큐 처리 포함"""
         api_logger.info(f"함수별 분석 시작: {len(files)}개 파일")
-        sys.stdout.flush()
         
         for file in files:
             filename = file.get('filename', 'unknown')
@@ -73,7 +211,9 @@ class CodeAnalysisService:
                 await self._enqueue_function_analysis(func_info, commit_sha, user_id, owner, repo)
             
             api_logger.info(f"파일 '{filename}': {len(functions)}개 함수중 {len([f for f in functions if f.get('has_changes', True) or f.get('is_new_file', False)])}개 변경된 함수 분석 큐에 추가")
-            sys.stdout.flush()
+        
+        # ✅ Step 4: enqueue 완료 후 자동으로 큐 처리 트리거
+        await self.process_queue()
     
     def _extract_detailed_diff(self, patch: str) -> Dict[int, Dict]:
         """diff 패치에서 상세 변경 정보 추출(라인)"""
@@ -160,16 +300,29 @@ class CodeAnalysisService:
         return await extract_functions_by_type(file_content, filename, diff_info)
         
     async def _enqueue_function_analysis(self, func_info: Dict, commit_sha: str, user_id: str, owner: str, repo: str):
-        """함수별 분석 작업을 큐에 추가 - 변경된 함수 + 새 파일"""
+        """함수별 분석 작업을 큐에 추가 - 변경된 함수 + 새 파일 (Hash 캐시 확인)"""
         
         # 변경사항도 없고 새 파일도 아니면 스킵
         if not func_info.get('has_changes', True) and not func_info.get('is_new_file', False): 
             api_logger.info(f"함수 '{func_info['name']}' 변경 없음")
             return
         
-        # Redis 키 생성 (commit_sha 포함)
-        redis_key = f"{user_id}:func:{commit_sha}:{func_info['filename']}:{func_info['name']}"
-        cached_result = self.redis_client.get(redis_key)
+        # ✅ Step 3: Hash 기반 캐시 확인 (개별 키 제거)
+        file_key = f"{user_id}:func:{commit_sha}:{func_info['filename']}"
+        
+        def _sync_cache_check():
+            try:
+                return self.redis_client.hget(file_key, func_info['name'])
+            except Exception as e:
+                api_logger.error(f"Redis Hash 캐시 확인 실패: {e}")
+                return None
+        
+        try:
+            executor = await self._get_shared_executor()
+            cached_result = await asyncio.get_event_loop().run_in_executor(executor, _sync_cache_check)
+        except Exception as e:
+            api_logger.error(f"캐시 확인 중 오류: {e}")
+            cached_result = None
         
         # 캐시가 있고 변경사항이 없는 기존 파일만 캐시 사용 (새 파일은 항상 분석)
         if cached_result and not func_info.get('has_changes', True) and not func_info.get('is_new_file', False):
@@ -178,6 +331,9 @@ class CodeAnalysisService:
         
         # 변경된 함수이거나 새 파일인 경우 큐에 추가
         if func_info.get('has_changes', True) or func_info.get('is_new_file', False):
+            # ✅ Step 4: pending 카운터 증가
+            await self._increment_pending_count(user_id, commit_sha, func_info['filename'])
+            
             analysis_item = {
                 'function_info': func_info,
                 'commit_sha': commit_sha,
@@ -225,35 +381,44 @@ class CodeAnalysisService:
         
         return metadata
     
+    # ✅ Step 4: 큐 처리 루프 개선 (wait_for timeout 방식)
     async def process_queue(self):
-        """함수별 분석 큐 처리"""
+        """함수별 분석 큐 처리 - 새로 추가된 아이템도 놓치지 않음"""
         api_logger.info("함수별 분석 큐 처리 시작")
-        sys.stdout.flush()
         
-        # 큐 사이즈만큼(이전 방식 - 기존: empty() 체크, get() 호출)
-        total_items = self.function_queue.qsize()
-        api_logger.info(f"처리할 함수 수: {total_items}")
-        
-        for i in range(total_items):
-            item = None
+        processed_count = 0
+        while True:
             try:
-                item = await self.function_queue.get()
+                # 큐가 비어있으면 0.1초 후 TimeoutError 발생 → 루프 탈출
+                item = await asyncio.wait_for(self.function_queue.get(), timeout=0.1)
+            except asyncio.TimeoutError:
+                break
+            
+            try:
                 await self._analyze_function(item)
-                api_logger.info(f"진행상황: {i+1}/{total_items}") 
+                processed_count += 1
+                api_logger.info(f"진행상황: {processed_count}개 함수 처리 완료")
             except Exception as e:
                 api_logger.error(f"함수 분석 처리 오류: {e}")
-                if item:
-                    func_name = item.get('function_info', {}).get('name', 'unknown')
-                    api_logger.error(f"실패한 함수: {func_name}")
+                api_logger.error(traceback.format_exc())
+                
+                # ✅ 실패시에도 pending 카운터 감소
+                try:
+                    user_id = item.get('user_id')
+                    commit_sha = item.get('commit_sha') 
+                    filename = item.get('function_info', {}).get('filename')
+                    if user_id and commit_sha and filename:
+                        await self._decrement_pending_count(user_id, commit_sha, filename)
+                except Exception as decr_error:
+                    api_logger.error(f"실패 후 카운터 감소 오류: {decr_error}")
+                    api_logger.error(traceback.format_exc())
             finally:
-                if item:
-                    self.function_queue.task_done()
+                self.function_queue.task_done()
         
-        api_logger.info("모든 함수 분석 완료")
-        sys.stdout.flush()
+        api_logger.info(f"모든 함수 분석 완료 (총 {processed_count}개 처리)")
     
     async def _analyze_function(self, item: Dict):
-        """개별 함수 분석 처리"""
+        """개별 함수 분석 처리 (Step 3,4: Hash 저장 + pending 카운터)"""
         func_info = item['function_info']
         func_name = func_info['name']
         filename = func_info['filename']
@@ -262,58 +427,80 @@ class CodeAnalysisService:
         
         api_logger.info(f"함수 '{func_name}' 분석 시작")
         
-        # Redis에서 이전 분석 결과 조회
-        redis_key = f"{user_id}:func:{commit_sha}:{filename}:{func_name}"
-        previous_summary = self.redis_client.get(redis_key)
+        try:
+            # ✅ Step 3: Hash에서 이전 분석 결과 조회 (개별 키 제거)
+            file_key = f"{user_id}:func:{commit_sha}:{filename}"
+            
+            def _sync_prev_check():
+                try:
+                    return self.redis_client.hget(file_key, func_name)
+                except Exception as e:
+                    api_logger.error(f"이전 요약 조회 실패: {e}")
+                    return None
+            
+            executor = await self._get_shared_executor()
+            previous_summary_bytes = await asyncio.get_event_loop().run_in_executor(executor, _sync_prev_check)
+            previous_summary = previous_summary_bytes.decode('utf-8') if previous_summary_bytes else None
         
-        # 참조 파일 내용 가져오기
-        reference_content = None
-        if 'reference_file' in item['metadata']:
-            # reference_function이 있으면 파일#함수 형식으로 조합
-            if 'reference_function' in item['metadata']:
-                reference_path = f"{item['metadata']['reference_file']}#{item['metadata']['reference_function']}"
+            # 참조 파일 내용 가져오기
+            reference_content = None
+            if 'reference_file' in item['metadata']:
+                # reference_function이 있으면 파일#함수 형식으로 조합
+                if 'reference_function' in item['metadata']:
+                    reference_path = f"{item['metadata']['reference_file']}#{item['metadata']['reference_function']}"
+                else:
+                    reference_path = item['metadata']['reference_file']
+                    
+                reference_content = await self._fetch_reference_function(
+                    reference_path,
+                    item['owner'], 
+                    item['repo'], 
+                    item['commit_sha'],
+                    user_id
+                )
+            
+            # 함수가 길면 청크로 분할
+            chunks = self._split_function_if_needed(func_info['code'])
+            
+            if len(chunks) == 1:
+                # 단일 청크 처리
+                summary = await self._call_llm_for_function(
+                    func_info, 
+                    chunks[0], 
+                    item['metadata'], 
+                    previous_summary, 
+                    reference_content
+                )
             else:
-                reference_path = item['metadata']['reference_file']
+                # 다중 청크 연속 처리
+                summary = await self._process_multi_chunk_function(
+                    func_info, 
+                    chunks, 
+                    item['metadata'], 
+                    previous_summary, 
+                    reference_content
+                )
+            
+            # ✅ Step 3: Hash 방식으로 요약 저장
+            await self._save_function_summary_to_hash(
+                user_id, commit_sha, filename, func_name, summary
+            )
+            
+            # ✅ Step 4: pending 카운터 감소 및 완료 확인
+            remaining = await self._decrement_pending_count(user_id, commit_sha, filename)
+            api_logger.info(f"함수 '{func_name}' 분석 완료 (남은 함수: {remaining}개)")
+            
+            # 파일 분석 완료시 Notion 업데이트
+            if remaining == 0:
+                await self._handle_file_analysis_complete(func_info, user_id, commit_sha)
                 
-            reference_content = await self._fetch_reference_function(
-                reference_path,
-                item['owner'], 
-                item['repo'], 
-                item['commit_sha'],
-                user_id
-            )
-        
-        # 함수가 길면 청크로 분할
-        chunks = self._split_function_if_needed(func_info['code'])
-        
-        if len(chunks) == 1:
-            # 단일 청크 처리
-            summary = await self._call_llm_for_function(
-                func_info, 
-                chunks[0], 
-                item['metadata'], 
-                previous_summary, 
-                reference_content
-            )
-        else:
-            # 다중 청크 연속 처리
-            summary = await self._process_multi_chunk_function(
-                func_info, 
-                chunks, 
-                item['metadata'], 
-                previous_summary, 
-                reference_content
-            )
-        
-        # Redis에 최종 요약 저장 (str을 bytes로 인코딩)
-        summary_bytes = summary.encode('utf-8') if isinstance(summary, str) else summary
-        self.redis_client.setex(redis_key, 86400 * 7, summary_bytes)  # 7일 보관
-        
-        # Notion 업데이트는 파일 단위로 별도 처리
-        await self._update_notion_if_needed(func_info, summary, user_id, commit_sha)
-        
-        api_logger.info(f"함수 '{func_name}' 분석 완료")
-    
+        except Exception as e:
+            # ✅ Step 4: 실패시에도 pending 카운터 감소
+            await self._decrement_pending_count(user_id, commit_sha, filename)
+            api_logger.error(f"함수 분석 실패 ({func_name}): {e}")
+            api_logger.error(traceback.format_exc())
+            raise
+
     def _split_function_if_needed(self, code: str, max_length: int = 2000) -> List[str]:
         """함수가 너무 길면 청크로 분할"""
         if len(code) <= max_length:
@@ -334,7 +521,6 @@ class CodeAnalysisService:
         
         for i, chunk in enumerate(chunks):
             api_logger.info(f"함수 '{func_info['name']}' 청크 {i+1}/{len(chunks)} 처리")
-            sys.stdout.flush()
             
             # 이전 요약을 포함한 LLM 호출
             chunk_summary = await self._call_llm_for_function(
@@ -351,10 +537,11 @@ class CodeAnalysisService:
         
         return current_summary
     
+    # ✅ Step 6: LLM 이중 타임아웃 적용
     async def _call_llm_for_function(self, func_info: Dict, code: str, metadata: Dict, 
                                    previous_summary: str = None, reference_content: str = None,
                                    chunk_index: int = 0, total_chunks: int = 1) -> str:
-        """함수별 LLM 분석 호출"""
+        """함수별 LLM 분석 호출 (Step 6: 이중 타임아웃 30s+35s)"""
         
         # 프롬프트 구성
         prompt_parts = []
@@ -417,71 +604,104 @@ class CodeAnalysisService:
         
         full_prompt = "\n".join(prompt_parts)
         
-        # 로컬 LLM 호출
+        # ✅ Step 6: 이중 타임아웃 동기 함수 분리
+        def _sync_llm_call():
+            """동기식 LLM 호출 (내부 타임아웃 30초)"""
+            try:
+                # OpenAI 클라이언트 설정 (로컬 LLM 서버)
+                client = OpenAI(
+                    base_url="http://127.0.0.1:1234/v1",
+                    api_key="lm-studio"
+                )
+                
+                response = client.chat.completions.create(
+                    model="meta-llama-3-8b-instruct",
+                    messages=[
+                        {"role": "system", "content": "당신은 코드 분석 전문가입니다. 주어진 함수를 분석하여 명확하고 유용한 정보를 제공하세요."},
+                        {"role": "user", "content": full_prompt}
+                    ],
+                    timeout=30  # ✅ Step 6: LLM 내부 타임아웃 (함수: 30초)
+                )
+                
+                return response.choices[0].message.content
+                
+            except Exception as e:
+                api_logger.error(f"LLM 호출 실패(동기 단계): {e}")
+                api_logger.error(traceback.format_exc())
+                return f"**기능 요약**: {func_info['name']} 함수\n**분석 상태**: LLM 분석 실패 - {e}"
+        
         try:
             api_logger.info(f"함수 '{func_info['name']}' LLM 분석 시작")
             
-            # OpenAI 클라이언트 설정 (로컬 LLM 서버)
-            client = OpenAI(
-                base_url="http://127.0.0.1:1234/v1",
-                api_key="lm-studio"
+            # ✅ Step 5: 공유 ThreadPoolExecutor 사용
+            executor = await self._get_shared_executor()
+            
+            # ✅ Step 6: 이중 타임아웃 (LLM 30초 + asyncio 35초)
+            loop = asyncio.get_event_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(executor, _sync_llm_call),
+                timeout=35  # ✅ Step 6: 외부 타임아웃 (35초)
             )
             
-            response = client.chat.completions.create(
-                model="meta-llama-3-8b-instruct",
-                messages=[
-                    {"role": "system", "content": "당신은 코드 분석 전문가입니다. 주어진 함수를 분석하여 명확하고 유용한 정보를 제공하세요."},
-                    {"role": "user", "content": full_prompt}
-                ]
-            )
-            
-            result = response.choices[0].message.content
             api_logger.info(f"함수 '{func_info['name']}' LLM 분석 완료")
-            sys.stdout.flush()
             return result
             
+        except asyncio.TimeoutError:
+            api_logger.error(f"함수 '{func_info['name']}' LLM 호출 타임아웃 (35초)")
+            return f"**기능 요약**: {func_info['name']} 함수\n**분석 상태**: 타임아웃으로 인한 분석 실패"
         except Exception as e:
-            api_logger.error(f"LLM 호출 실패: {str(e)}")
-            # 실패 시 간단한 응답 반환
-            return f"**기능 요약**: {func_info['name']} 함수\n**분석 상태**: LLM 분석 실패 - {str(e)}"
+            api_logger.error(f"비동기 LLM 호출 실패: {e}")
+            api_logger.error(traceback.format_exc())
+            return f"**기능 요약**: {func_info['name']} 함수\n**분석 상태**: LLM 분석 실패 - {e}"
     
+    # ✅ Step 8: UUID 기반 Request ID 충돌 방지
     async def _fetch_reference_function(self, reference_file: str, owner: str, repo: str, commit_sha: str, user_id: str) -> str:
-        """참조 파일의 함수 요약을 Redis에서 조회"""
+        """참조 파일의 함수 요약을 Redis Hash에서 조회 (Step 3: keys() 제거)"""
         # 파일에서 특정 함수가 지정되었는지 확인
         if '#' in reference_file:
             file_path, func_name = reference_file.split('#', 1)
-            redis_key = f"{user_id}:func:{commit_sha}:{file_path}:{func_name}"
-            cached_content = self.redis_client.get(redis_key)
-            if cached_content:
-                return cached_content
+            file_key = f"{user_id}:func:{commit_sha}:{file_path}"
+            
+            # ✅ Step 3: Hash에서 특정 함수 조회 (개별 키 제거)
+            def _sync_ref_get():
+                try:
+                    return self.redis_client.hget(file_key, func_name)
+                except Exception as e:
+                    api_logger.error(f"참조 함수 조회 실패: {e}")
+                    return None
+            
+            try:
+                executor = await self._get_shared_executor()
+                cached_content_bytes = await asyncio.get_event_loop().run_in_executor(executor, _sync_ref_get)
+                if cached_content_bytes:
+                    return cached_content_bytes.decode('utf-8') if isinstance(cached_content_bytes, bytes) else cached_content_bytes
+            except Exception as e:
+                api_logger.error(f"참조 함수 조회 중 오류: {e}")
         else:
             # 파일 전체 참조인 경우 주요 함수들 조회
-            pattern = f"{user_id}:func:{commit_sha}:{reference_file}:*"
-            function_keys = self.redis_client.keys(pattern)
+            file_key = f"{user_id}:func:{commit_sha}:{reference_file}"
             
-            if function_keys:
-                # 여러 함수가 있으면 모두 조합
-                all_summaries = []
-                for key in function_keys:
-                    # Redis key가 bytes일 수 있으므로 str로 변환
-                    key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-                    func_name = key_str.split(":")[-1]
-                    summary_raw = self.redis_client.get(key)
-                    if summary_raw:
-                        # bytes면 str로 변환, 이미 str이면 그대로 사용
-                        summary = summary_raw.decode('utf-8') if isinstance(summary_raw, bytes) else summary_raw
-                        all_summaries.append(f"**{func_name}():**\n{summary}")
+            # ✅ Step 3: Hash 전체 조회 (keys() 제거)
+            try:
+                func_summaries = await self._collect_function_summaries(user_id, reference_file, commit_sha)
                 
-                if all_summaries:
-                    return "\n\n".join(all_summaries)
+                if func_summaries:
+                    all_summaries = []
+                    for func_name, summary in func_summaries.items():
+                        all_summaries.append(f"**{func_name}():**\n{summary}")
+                    
+                    if all_summaries:
+                        return "\n\n".join(all_summaries)
+            except Exception as e:
+                api_logger.error(f"참조 파일 전체 조회 실패: {e}")
         
         # Redis에 없으면 파일 내용 요청 (기존 방식 활용)
         return await self._request_reference_file_content(reference_file, owner, repo, commit_sha)
     
     async def _request_reference_file_content(self, reference_file: str, owner: str, repo: str, commit_sha: str) -> str:
-        """GitHub에서 참조 파일 내용 요청 (기존 방식 유지)"""
-        # 기존 구현과 동일한 Redis 키-값 방식 사용
-        request_id = f"ref_{int(time.time())}_{hash(reference_file) % 1000}"
+        """GitHub에서 참조 파일 내용 요청 (Step 8: UUID 기반 Request ID)"""
+        # ✅ Step 8: UUID로 완전 유니크한 Request ID 생성
+        request_id = str(uuid.uuid4())
         
         request_data = {
             'path': reference_file,
@@ -492,93 +712,81 @@ class CodeAnalysisService:
         request_key = f"ref_request:{owner}:{repo}:{request_id}"
         response_key = f"ref_response:{owner}:{repo}:{request_id}"
         
-        # JSON 데이터를 bytes로 인코딩해서 저장
-        request_data_json = json.dumps(request_data)
-        request_data_bytes = request_data_json.encode('utf-8')
-        self.redis_client.setex(request_key, 300, request_data_bytes)
+        def _sync_request_save():
+            try:
+                # JSON 데이터를 bytes로 인코딩해서 저장
+                request_data_json = json.dumps(request_data)
+                request_data_bytes = request_data_json.encode('utf-8')
+                self.redis_client.setex(request_key, 300, request_data_bytes)
+            except Exception as e:
+                api_logger.error(f"참조 파일 요청 저장 실패: {e}")
+                api_logger.error(traceback.format_exc())
+                raise
+        
+        try:
+            executor = await self._get_shared_executor()
+            await asyncio.get_event_loop().run_in_executor(executor, _sync_request_save)
+        except Exception as e:
+            api_logger.error(f"참조 파일 요청 중 오류: {e}")
+            return ""
         
         # 5초 폴링 대기
         for _ in range(10):
-            response_str = self.redis_client.get(response_key)
-            if response_str:
-                response_data = json.loads(response_str)
-                if response_data.get('status') == 'success':
-                    return response_data.get('content', '')
+            def _sync_response_check():
+                try:
+                    return self.redis_client.get(response_key)
+                except Exception as e:
+                    api_logger.error(f"참조 파일 응답 확인 실패: {e}")
+                    return None
+            
+            try:
+                executor = await self._get_shared_executor()
+                response_str = await asyncio.get_event_loop().run_in_executor(executor, _sync_response_check)
+                if response_str:
+                    response_data = json.loads(response_str)
+                    if response_data.get('status') == 'success':
+                        return response_data.get('content', '')
+            except Exception as e:
+                api_logger.error(f"참조 파일 응답 처리 중 오류: {e}")
+            
             await asyncio.sleep(0.5)
         
         return ""
     
-    async def _update_notion_if_needed(self, func_info: Dict, summary: str, user_id: str, commit_sha: str):
-        """파일별 종합 분석 및 Notion 업데이트"""
+    # ✅ Step 4: 파일 완료 처리 로직 분리
+    async def _handle_file_analysis_complete(self, func_info: Dict, user_id: str, commit_sha: str):
+        """파일의 모든 함수 분석 완료시 처리"""
         filename = func_info['filename']
+        api_logger.info(f"파일 '{filename}' 모든 함수 분석 완료 - Notion 업데이트 시작")
         
-        # 1. 파일의 모든 함수 분석이 완료되었는지 확인
-        if await self._is_file_analysis_complete(filename, user_id):
-            # 2. 파일별 종합 분석 수행
+        try:
+            # 파일별 종합 분석 수행
             file_summary = await self._generate_file_level_analysis(filename, user_id, commit_sha)
             
-            # 3. Notion AI 요약 블록 업데이트
+            # Notion AI 요약 블록 업데이트
             await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
             
-            # 4. 아키텍처 개선 제안 생성
+            # 아키텍처 개선 제안 생성
             await self._generate_architecture_suggestions(filename, file_summary, user_id)
-
-    async def _is_file_analysis_complete(self, filename: str, user_id: str) -> bool:
-        """파일의 모든 함수 분석이 완료되었는지 확인"""
-        
-        # Redis에서 해당 파일의 모든 함수 키 조회
-        pattern = f"{user_id}:func:*:{filename}:*"
-        function_keys = self.redis_client.keys(pattern)
-        
-        # 분석 대기 중인 함수가 있는지 큐에서 확인
-        temp_queue = []
-        pending_functions = set()
-        
-        # 큐에서 해당 파일의 대기 중인 함수들 확인
-        try:
-            while not self.function_queue.empty():
-                item = await self.function_queue.get()
-                temp_queue.append(item)
-                
-                if item and item.get('function_info', {}).get('filename') == filename:
-                    func_name = item.get('function_info', {}).get('name', 'unknown')
-                    pending_functions.add(func_name)
+            
+            api_logger.info(f"파일 '{filename}' Notion 업데이트 완료")
+            
         except Exception as e:
-            api_logger.error(f"큐 확인 중 오류: {e}")
-        finally:
-            # 큐에 다시 넣기
-            for item in temp_queue:
-                if item:  # None 체크 추가
-                    await self.function_queue.put(item)
-        
-        # 대기 중인 함수가 없으면 완료
-        is_complete = len(pending_functions) == 0
-        
-        if is_complete:
-            api_logger.info(f"파일 '{filename}' 분석 완료 확인됨")
-        else:
-            api_logger.info(f"파일 '{filename}' 대기 중인 함수: {pending_functions}")
-        
-        return is_complete
+            api_logger.error(f"파일 완료 처리 실패 ({filename}): {e}")
+            api_logger.error(traceback.format_exc())
 
     async def _generate_file_level_analysis(self, filename: str, user_id: str, commit_sha: str) -> str:
-        """파일 전체 흐름 분석 및 종합 요약 생성"""
+        """파일 전체 흐름 분석 및 종합 요약 생성 (Step 1: Hash 기반)"""
         
-        # 1. 파일의 모든 함수 요약 수집 (전체 구조 파악을 위해 모든 커밋 포함)
-        pattern = f"{user_id}:func:*:{filename}:*"
-        function_keys = self.redis_client.keys(pattern)
+        # ✅ Step 1: Hash에서 함수별 요약 수집 (keys() 제거)
+        file_key = f"{user_id}:func:{commit_sha}:{filename}"
+        summaries_hash = self.redis_client.hgetall(file_key)
         
         function_summaries = {}
-        for key in function_keys:
-            # Redis key가 bytes일 수 있으므로 str로 변환
-            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-            function_name = key_str.split(":")[-1]  # func:파일:함수명 → 함수명
-            
-            summary_raw = self.redis_client.get(key)
-            if summary_raw:
-                # bytes면 str로 변환, 이미 str이면 그대로 사용
-                summary = summary_raw.decode('utf-8') if isinstance(summary_raw, bytes) else summary_raw
-                function_summaries[function_name] = summary
+        for func_name_bytes, summary_bytes in summaries_hash.items():
+            func_name = func_name_bytes.decode('utf-8') if isinstance(func_name_bytes, bytes) else func_name_bytes
+            summary = summary_bytes.decode('utf-8') if isinstance(summary_bytes, bytes) else summary_bytes
+            function_summaries[func_name] = summary
         
         # 2. 함수들을 타입별로 분류
         categorized_functions = {
@@ -612,91 +820,91 @@ class CodeAnalysisService:
         
         # 3. 파일 전체 분석 프롬프트 구성
         analysis_prompt = f"""
-    파일명: {filename}
+파일명: {filename}
 
-    다음은 이 파일의 모든 함수별 분석 결과입니다. 
-    전체적인 아키텍처 흐름과 개선방안을 분석해주세요.
+다음은 이 파일의 모든 함수별 분석 결과입니다. 
+전체적인 아키텍처 흐름과 개선방안을 분석해주세요.
 
-    ## 📋 함수별 분석 결과
+## 📋 함수별 분석 결과
 
-    ### 🌍 전역 코드 (임포트/상수)
-    {categorized_functions['global'][0] if categorized_functions['global'] else '없음'}
+### 🌍 전역 코드 (임포트/상수)
+{categorized_functions['global'][0] if categorized_functions['global'] else '없음'}
 
-    """
+"""
 
         # 클래스별 메서드 추가
         for class_name, methods in categorized_functions['class_methods'].items():
             analysis_prompt += f"""
-    ### 🏗️ {class_name} 클래스
-    """
+### 🏗️ {class_name} 클래스
+"""
             for method in methods:
                 analysis_prompt += f"""
-    **{method['method']}():**
-    {method['summary']}
+**{method['method']}():**
+{method['summary']}
 
-    """
+"""
 
         # 독립 함수들 추가
         if categorized_functions['functions']:
             analysis_prompt += """
-    ### ⚡ 독립 함수들
-    """
+### ⚡ 독립 함수들
+"""
             for func in categorized_functions['functions']:
                 analysis_prompt += f"""
-    **{func['function']}():**
-    {func['summary']}
+**{func['function']}():**
+{func['summary']}
 
-    """
+"""
 
         # 헬퍼 함수들 추가
         if categorized_functions['helpers']:
             analysis_prompt += """
-    ### 🔧 헬퍼 함수들
-    """
+### 🔧 헬퍼 함수들
+"""
             for helper in categorized_functions['helpers']:
                 analysis_prompt += f"""
-    **{helper['function']}():**
-    {helper['summary']}
+**{helper['function']}():**
+{helper['summary']}
 
-    """
+"""
 
         # 분석 요청 추가
         analysis_prompt += """
-    ## 🎯 전체 분석 요청
+## 🎯 전체 분석 요청
 
-    다음 관점에서 종합 분석해주세요:
+다음 관점에서 종합 분석해주세요:
 
-    ### 1. **🏛️ 아키텍처 분석**
-    - 전체적인 설계 패턴과 구조
-    - 클래스와 함수들 간의 관계
-    - 책임 분리가 잘 되어있는지
+### 1. **🏛️ 아키텍처 분석**
+- 전체적인 설계 패턴과 구조
+- 클래스와 함수들 간의 관계
+- 책임 분리가 잘 되어있는지
 
-    ### 2. **🔄 데이터 흐름 분석**  
-    - 주요 데이터가 어떻게 처리되는지
-    - 함수들 간의 호출 관계와 의존성
-    - 병목 구간이나 개선 포인트
+### 2. **🔄 데이터 흐름 분석**  
+- 주요 데이터가 어떻게 처리되는지
+- 함수들 간의 호출 관계와 의존성
+- 병목 구간이나 개선 포인트
 
-    ### 3. **🚀 성능 및 확장성**
-    - 성능상 문제가 될 수 있는 부분
-    - 확장성을 위한 개선 방안
-    - 메모리 사용 최적화 포인트
+### 3. **🚀 성능 및 확장성**
+- 성능상 문제가 될 수 있는 부분
+- 확장성을 위한 개선 방안
+- 메모리 사용 최적화 포인트
 
-    ### 4. **🛡️ 안정성 및 에러 처리**
-    - 예외 처리가 충분한지
-    - 엣지 케이스 대응 방안
-    - 로깅 및 모니터링 개선점
+### 4. **🛡️ 안정성 및 에러 처리**
+- 예외 처리가 충분한지
+- 엣지 케이스 대응 방안
+- 로깅 및 모니터링 개선점
 
-    ### 5. **📈 코드 품질 평가**
-    - 가독성 및 유지보수성
-    - 중복 코드나 리팩토링 대상
-    - 테스트 가능성
+### 5. **📈 코드 품질 평가**
+- 가독성 및 유지보수성
+- 중복 코드나 리팩토링 대상
+- 테스트 가능성
 
-    ### 6. **🎯 구체적 개선 제안**
-    - 우선순위별 개선 사항 (상/중/하)
-    - 각 개선사항의 예상 효과
-    - 구현 난이도 및 소요 시간 추정
+### 6. **🎯 구체적 개선 제안**
+- 우선순위별 개선 사항 (상/중/하)
+- 각 개선사항의 예상 효과
+- 구현 난이도 및 소요 시간 추정
 
-    **응답 형식:** 마크다운으로 구조화하여 Notion에서 읽기 좋게 작성
+**응답 형식:** 마크다운으로 구조화하여 Notion에서 읽기 좋게 작성
         """
         
         # 4. 프롬프트 정리 (탭문자, 연속 공백 제거)
@@ -760,7 +968,6 @@ class CodeAnalysisService:
         
         for i, chunk in enumerate(chunks):
             api_logger.info(f"파일 '{filename}' 청크 {i+1}/{len(chunks)} 분석 시작")
-            sys.stdout.flush()
             
             # 첫 번째 청크가 아니면 이전 요약을 포함한 프롬프트 구성
             if current_summary:
@@ -782,239 +989,89 @@ class CodeAnalysisService:
             current_summary = chunk_summary  # 다음 청크에서 사용할 요약 업데이트
             
             api_logger.info(f"파일 '{filename}' 청크 {i+1}/{len(chunks)} 분석 완료")
-            sys.stdout.flush()
         
         api_logger.info(f"파일 '{filename}' 전체 다중 청크 분석 완료")
         return current_summary
 
     async def _call_llm_for_file_analysis(self, prompt: str) -> str:
-        """파일 전체 분석을 위한 LLM 호출"""
-        try:
-            api_logger.info("파일 전체 분석 LLM 호출 시작")
-            
-            # OpenAI 클라이언트 설정 (로컬 LLM 서버)
-            client = OpenAI(
-                base_url="http://127.0.0.1:1234/v1",
-                api_key="lm-studio"
-            )
-            
-            response = client.chat.completions.create(
-                model="meta-llama-3-8b-instruct",
-                messages=[
-                    {"role": "system", "content": "당신은 소프트웨어 아키텍처 전문가입니다. 파일 전체의 구조와 흐름을 분석하여 개선 방안을 제시하세요."},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            
-            result = response.choices[0].message.content
-            api_logger.info("파일 전체 분석 LLM 호출 완료")
-            return result
-            
-        except Exception as e:
-            api_logger.error(f"파일 분석 LLM 호출 실패: {str(e)}")
-            # 실패 시 기본 응답 반환
-            return f"""
+        """파일 전체 분석을 위한 LLM 호출 (Step 6: 이중 타임아웃 60s+65s)"""
+        
+        # ✅ Step 6: 이중 타임아웃 동기 함수 분리
+        def _sync_file_analysis_call():
+            """동기식 파일 분석 LLM 호출 (내부 타임아웃 60초)"""
+            try:
+                # OpenAI 클라이언트 설정 (로컬 LLM 서버)
+                client = OpenAI(
+                    base_url="http://127.0.0.1:1234/v1",
+                    api_key="lm-studio"
+                )
+                
+                response = client.chat.completions.create(
+                    model="meta-llama-3-8b-instruct",
+                    messages=[
+                        {"role": "system", "content": "당신은 소프트웨어 아키텍처 전문가입니다. 파일 전체의 구조와 흐름을 분석하여 개선 방안을 제시하세요."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    timeout=60  # ✅ Step 6: LLM 내부 타임아웃 (파일: 60초)
+                )
+                
+                return response.choices[0].message.content
+                
+            except Exception as e:
+                api_logger.error(f"파일 분석 LLM 호출 실패(동기 단계): {e}")
+                api_logger.error(traceback.format_exc())
+                return f"""
 ## 🏛️ 아키텍처 분석
 LLM 분석 실패로 인한 기본 응답
 
 ## 📝 분석 상태
-LLM 호출 오류: {str(e)}
+LLM 호출 오류: {e}
 
 ## 🔧 해결 방안
 로컬 LLM 서버 상태를 확인하세요.
 """
-    
-    def _find_closest_page_to_today(self, pages: list) -> dict | None:
-        """
-        가장 가까운 날짜에 생성된 row에 요약 저장
-        """
-        today = date.today()
         
-        if not pages:
-            return None
-        
-        # 오늘 날짜와의 차이를 계산하여 가장 가까운 페이지 찾기
-        closest_page = None
-        min_diff = float('inf')
-        
-        for page in pages:
-            page_date = datetime.fromisoformat(page["date"]).date()
-            diff = abs((today - page_date).days)
-            
-            if diff < min_diff:
-                min_diff = diff
-                closest_page = page
-        
-        return closest_page
-    
-    def _collect_function_summaries(self, user_id: str, filename: str, commit_sha: str) -> Dict[str, str]:
-        """Redis에서 파일의 함수별 분석 결과 수집"""
-        func_keys = self.redis_client.keys(f"{user_id}:func:{commit_sha}:{filename}:*")
-        func_summaries = {}
-        
-        for key in func_keys:
-            # Redis key가 bytes일 수 있으므로 str로 변환
-            key_str = key.decode('utf-8') if isinstance(key, bytes) else key
-            # key 형식: "{user_id}:func:{commit_sha}:{filename}:{func_name}"
-            func_name = key_str.split(":")[-1]  # 마지막 부분이 함수명
-            summary_raw = self.redis_client.get(key)
-            if summary_raw:
-                # bytes면 str로 변환, 이미 str이면 그대로 사용
-                summary = summary_raw.decode('utf-8') if isinstance(summary_raw, bytes) else summary_raw
-                func_summaries[func_name] = summary
-        
-        api_logger.info(f"파일 '{filename}': {len(func_summaries)}개 함수 분석 결과 수집 (커밋: {commit_sha[:8]})")
-        return func_summaries
-    
-    def _build_analysis_summary(self, filename: str, file_summary: str, func_summaries: Dict[str, str]) -> str:
-        """토글 블록 내부에 들어갈 마크다운 콘텐츠 구성"""
-        analysis_parts = [
-            f"## {filename} 전체\n",
-            file_summary,
-            ""
-        ]
-        
-        # 함수별 평가 추가
-        for func_name, summary in func_summaries.items():
-            analysis_parts.extend([
-                f"### {func_name}()\n",
-                summary,
-                ""
-            ])
-
-        result = "\n".join(analysis_parts)
-        api_logger.info(f"분석 요약 구성 완료: {len(analysis_parts)}개 파트")
-        return result
-    
-    async def _find_target_page(self, user_id: str) -> Optional[Dict]:
-        """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
         try:
-            api_logger.info(f"_find_target_page 시작: {user_id}")
-            # 1. 현재 활성 DB 찾기 (Redis → Supabase 순) - 동기식으로 변경
-            curr_db_id = self.redis_client.get(f"user:{user_id}:default_db")
-            if curr_db_id:
-                curr_db_id = curr_db_id.decode('utf-8') if isinstance(curr_db_id, bytes) else curr_db_id
-            api_logger.info(f"Redis에서 DB ID 조회 완료: {curr_db_id}")
+            api_logger.info("파일 전체 분석 LLM 호출 시작")
             
-            if not curr_db_id:
-                api_logger.info("Redis에 DB ID 없음, Supabase에서 조회")
-                db_result = self.supabase.table("db_webhooks")\
-                    .select("learning_db_id")\
-                    .eq("created_by", user_id)\
-                    .execute()
-                api_logger.info("Supabase DB 조회 완료")
-                
-                if not db_result.data:
-                    api_logger.error(f"현재 사용중인 학습 DB를 찾을 수 없습니다.")
-                    return None
-                curr_db_id = db_result.data[0]["learning_db_id"]
+            # ✅ Step 5: 공유 ThreadPoolExecutor 사용
+            executor = await self._get_shared_executor()
             
-            api_logger.info(f"최종 DB ID: {curr_db_id}")
-            # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순) - 동기식으로 변경
-            pages_key = f"user:{user_id}:db:{curr_db_id}:pages"
-            pages_data = self.redis_client.get(pages_key)
-            pages = None
-            if pages_data:
-                import json
-                pages_str = pages_data.decode('utf-8') if isinstance(pages_data, bytes) else pages_data
-                pages = json.loads(pages_str)
-            api_logger.info(f"Redis에서 페이지 조회 완료: {len(pages) if pages else 0}개")
+            # ✅ Step 6: 이중 타임아웃 (LLM 60초 + asyncio 65초)
+            loop = asyncio.get_event_loop()
+            result = await asyncio.wait_for(
+                loop.run_in_executor(executor, _sync_file_analysis_call),
+                timeout=65  # ✅ Step 6: 외부 타임아웃 (65초)
+            )
             
-            if not pages:
-                api_logger.info("Redis에 페이지 없음, Supabase에서 조회")
-                pages_result = self.supabase.table("learning_pages")\
-                    .select("*")\
-                    .eq("learning_db_id", curr_db_id)\
-                    .execute()
-                api_logger.info("Supabase 페이지 조회 완료")
-                pages = pages_result.data
-                api_logger.info(f"Supabase에서 페이지 조회 완료: {pages}")
-            # 3. 가장 가까운 날짜의 페이지 선택
-            closest_page = self._find_closest_page_to_today(pages)
-            if not closest_page:
-                api_logger.error(f"최근 학습 페이지를 찾을 수 없습니다.")
-                return None
+            api_logger.info("파일 전체 분석 LLM 호출 완료")
+            return result
             
-            api_logger.info("_find_target_page 완료")
-            return closest_page
+        except asyncio.TimeoutError:
+            api_logger.error("파일 분석 LLM 호출 타임아웃 (65초)")
+            return """
+## 🏛️ 아키텍처 분석
+타임아웃으로 인한 분석 실패
+
+## 📝 분석 상태
+LLM 호출 타임아웃 (65초)
+
+## 🔧 해결 방안
+로컬 LLM 서버 상태를 확인하세요.
+"""
         except Exception as e:
-            api_logger.error(f"_find_target_page 오류: {str(e)}")
-            raise e
+            api_logger.error(f"비동기 파일 분석 LLM 호출 실패: {e}")
+            api_logger.error(traceback.format_exc())
+            return f"""
+## 🏛️ 아키텍처 분석
+LLM 호출 실패
 
-    #[app.utils.notion_utils.py#markdown_to_notion_blocks]{}
-    async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str):
-        """분석 결과를 제목3 토글 블록으로 노션에 추가"""
-        # 1. Notion 토큰 조회 (완전 동기식)
-        token_key = f"user:{user_id}:notion_token"
-        api_logger.info(f"Redis에서 토큰 조회 시도: {token_key}")
-        token = self.redis_client.get(token_key)
-        
-        # Redis에 있으면 bytes를 str로 변환
-        if token:
-            token = token.decode('utf-8') if isinstance(token, bytes) else token
-            api_logger.info(f"Redis에서 토큰 조회 성공: {token[:20]}...")
-        else:
-            api_logger.info("Redis에 토큰이 없음, Supabase에서 조회")
+## 📝 분석 상태
+LLM 호출 오류: {e}
 
-        if not token:
-            # Redis에 없으면 Supabase에서 조회 (동기식 중복 구현)
-            try:
-                api_logger.info("Supabase 토큰 조회 시작")
-                integration_result = self.supabase.table("user_integrations")\
-                    .select("*")\
-                    .eq("user_id", user_id)\
-                    .eq("provider", "notion")\
-                    .execute()
-                
-                api_logger.info(f"Supabase 조회 결과: {len(integration_result.data)}개")
-                
-                if integration_result.data:
-                    # 암호화된 토큰 복호화 (auth_service 로직 복사)
-                    import base64
-                    from Crypto.Cipher import AES
-                    from app.core.config import settings
-                    
-                    api_logger.info("토큰 복호화 시작")
-                    res = integration_result.data[0]
-                    encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
-                    iv = base64.b64decode(res["token_iv"])
-                    
-                    token_data = base64.b64decode(res["access_token"])
-                    encrypted_token = token_data[:-16]
-                    tag = token_data[-16:]
-                    
-                    cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
-                    token = cipher.decrypt_and_verify(encrypted_token, tag).decode('utf-8')
-                    
-                    api_logger.info(f"토큰 복호화 성공: {token[:20]}...")
-                    
-                    # 조회한 토큰을 Redis에 저장 (1시간 만료) - 동기식으로 변경
-                    self.redis_client.setex(token_key, 3600, token)
-                    api_logger.info("Redis에 토큰 저장 완료")
-                    
-            except Exception as e:
-                api_logger.error(f"토큰 조회/복호화 실패: {str(e)}")
-                import traceback
-                api_logger.error(f"상세 오류: {traceback.format_exc()}")
-                token = None
-                
-                
-        if not token:
-            api_logger.error(f"Notion 토큰을 찾을 수 없습니다: {user_id}")
-            return
-        
-        api_logger.info(f"최종 토큰 확인: {token[:20]}...")
-        
-        # 2. NotionService로 요청 전송 전에 페이지 구조 확인
-        notion_service = NotionService(token=token)
-        
-        await notion_service.append_code_analysis_to_page(
-            ai_analysis_log_page_id, 
-            analysis_summary, 
-            commit_sha
-        )
-        
-        api_logger.info(f"Notion에 분석 결과 추가 완료: {commit_sha[:8]}")
+## 🔧 해결 방안
+로컬 LLM 서버 상태를 확인하세요.
+"""
 
     async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str, commit_sha: str):
         """Notion AI 요약 블록 업데이트"""
@@ -1078,3 +1135,239 @@ LLM 호출 오류: {str(e)}
         suggestions_key = f"{user_id}:suggestions:{filename}"
         suggestions_bytes = suggestions.encode('utf-8') if isinstance(suggestions, str) else suggestions
         self.redis_client.setex(suggestions_key, 86400 * 7, suggestions_bytes)  # 7일 보관
+
+    def _find_closest_page_to_today(self, pages: list) -> dict | None:
+        """
+        가장 가까운 날짜에 생성된 row에 요약 저장
+        """
+        today = date.today()
+        
+        if not pages:
+            return None
+        
+        # 오늘 날짜와의 차이를 계산하여 가장 가까운 페이지 찾기
+        closest_page = None
+        min_diff = float('inf')
+        
+        for page in pages:
+            page_date = datetime.fromisoformat(page["date"]).date()
+            diff = abs((today - page_date).days)
+            
+            if diff < min_diff:
+                min_diff = diff
+                closest_page = page
+        
+        return closest_page
+    
+    def _build_analysis_summary(self, filename: str, file_summary: str, func_summaries: Dict[str, str]) -> str:
+        """토글 블록 내부에 들어갈 마크다운 콘텐츠 구성"""
+        analysis_parts = [
+            f"## {filename} 전체\n",
+            file_summary,
+            ""
+        ]
+        
+        # 함수별 평가 추가
+        for func_name, summary in func_summaries.items():
+            analysis_parts.extend([
+                f"### {func_name}()\n",
+                summary,
+                ""
+            ])
+
+        result = "\n".join(analysis_parts)
+        api_logger.info(f"분석 요약 구성 완료: {len(analysis_parts)}개 파트")
+        return result
+    
+    async def _find_target_page(self, user_id: str) -> Optional[Dict]:
+        """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
+        try:
+            api_logger.info(f"_find_target_page 시작: {user_id}")
+            
+            # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
+            def _sync_redis_db_get():
+                try:
+                    return self.redis_client.get(f"user:{user_id}:default_db")
+                except Exception as e:
+                    api_logger.error(f"Redis DB ID 조회 실패: {e}")
+                    return None
+            
+            executor = await self._get_shared_executor()
+            curr_db_id = await asyncio.get_event_loop().run_in_executor(executor, _sync_redis_db_get)
+            if curr_db_id:
+                curr_db_id = curr_db_id.decode('utf-8') if isinstance(curr_db_id, bytes) else curr_db_id
+            api_logger.info(f"Redis에서 DB ID 조회 완료: {curr_db_id}")
+            
+            if not curr_db_id:
+                api_logger.info("Redis에 DB ID 없음, Supabase에서 조회")
+                try:
+                    # ✅ Step 1: Supabase 호출에 await 추가
+                    db_result = await self.supabase.table("db_webhooks")\
+                        .select("learning_db_id")\
+                        .eq("created_by", user_id)\
+                        .execute()
+                    api_logger.info("Supabase DB 조회 완료")
+                    
+                    if not db_result.data:
+                        # ✅ Step 9: 빈 결과에 대한 명확한 구분
+                        api_logger.warning(f"사용자 {user_id}의 활성 학습 DB가 존재하지 않습니다")
+                        # 기본 DB 생성 로직 또는 알림 로직 추가 가능
+                        return None
+                    curr_db_id = db_result.data[0]["learning_db_id"]
+                except Exception as e:
+                    # ✅ Step 9: Supabase 호출 자체가 실패한 경우
+                    api_logger.error(f"Supabase DB 조회 오류: {e}")
+                    api_logger.error(traceback.format_exc())
+                    # 알림 로직 삽입 (Slack, 이메일 등)
+                    return None
+            
+            api_logger.info(f"최종 DB ID: {curr_db_id}")
+            
+            # 2. 해당 DB의 페이지들 찾기 (Redis → Supabase 순)
+            pages_key = f"user:{user_id}:db:{curr_db_id}:pages"
+            
+            def _sync_redis_pages_get():
+                try:
+                    return self.redis_client.get(pages_key)
+                except Exception as e:
+                    api_logger.error(f"Redis 페이지 조회 실패: {e}")
+                    return None
+            
+            pages_data = await asyncio.get_event_loop().run_in_executor(executor, _sync_redis_pages_get)
+            pages = None
+            if pages_data:
+                try:
+                    pages_str = pages_data.decode('utf-8') if isinstance(pages_data, bytes) else pages_data
+                    pages = json.loads(pages_str)
+                except Exception as e:
+                    api_logger.error(f"Redis 페이지 데이터 파싱 실패: {e}")
+                    
+            api_logger.info(f"Redis에서 페이지 조회 완료: {len(pages) if pages else 0}개")
+            
+            if not pages:
+                api_logger.info("Redis에 페이지 없음, Supabase에서 조회")
+                pages_result = await self.supabase.table("learning_pages")\
+                    .select("*")\
+                    .eq("learning_db_id", curr_db_id)\
+                    .execute()
+                api_logger.info("Supabase 페이지 조회 완료")
+                pages = pages_result.data
+                api_logger.info(f"Supabase에서 페이지 조회 완료: {pages}")
+            # 3. 가장 가까운 날짜의 페이지 선택
+            closest_page = self._find_closest_page_to_today(pages)
+            if not closest_page:
+                # ✅ Step 9: 빈 페이지 결과에 대한 백업 플랜
+                api_logger.warning(f"사용자 {user_id}의 학습 페이지가 존재하지 않습니다")
+                # await self._create_default_learning_page(user_id, curr_db_id) 
+                return None
+            
+            api_logger.info("_find_target_page 완료")
+            return closest_page
+        except Exception as e:
+            api_logger.error(f"_find_target_page 오류: {e}")
+            api_logger.error(traceback.format_exc())
+            return None
+
+    #[app.utils.notion_utils.py#markdown_to_notion_blocks]{}
+    async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str):
+        """분석 결과를 제목3 토글 블록으로 노션에 추가 (I/O 오프로드)"""
+        # 1. Notion 토큰 조회 (I/O 오프로드)
+        token_key = f"user:{user_id}:notion_token"
+        api_logger.info(f"Redis에서 토큰 조회 시도: {token_key}")
+        
+        def _sync_token_get():
+            try:
+                return self.redis_client.get(token_key)
+            except Exception as e:
+                api_logger.error(f"Redis 토큰 조회 실패: {e}")
+                return None
+        
+        try:
+            executor = await self._get_shared_executor()
+            token = await asyncio.get_event_loop().run_in_executor(executor, _sync_token_get)
+            
+            # Redis에 있으면 bytes를 str로 변환
+            if token:
+                token = token.decode('utf-8') if isinstance(token, bytes) else token
+                api_logger.info(f"Redis에서 토큰 조회 성공: {token[:20]}...")
+            else:
+                api_logger.info("Redis에 토큰이 없음, Supabase에서 조회")
+        except Exception as e:
+            api_logger.error(f"Redis 토큰 조회 중 오류: {e}")
+            token = None
+
+        if not token:
+            # Redis에 없으면 Supabase에서 조회
+            try:
+                api_logger.info("Supabase 토큰 조회 시작")
+                # ✅ Step 1: Supabase 호출에 await 추가
+                integration_result = await self.supabase.table("user_integrations")\
+                    .select("*")\
+                    .eq("user_id", user_id)\
+                    .eq("provider", "notion")\
+                    .execute()
+                
+                api_logger.info(f"Supabase 조회 결과: {len(integration_result.data)}개")
+                
+                if integration_result.data:
+                    # ✅ Step 10: AES 복호화를 run_in_executor로 오프로드
+                    def _sync_decrypt():
+                        try:
+                            import base64
+                            from Crypto.Cipher import AES
+                            from app.core.config import settings
+                            
+                            res = integration_result.data[0]
+                            encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
+                            iv = base64.b64decode(res["token_iv"])
+                            
+                            token_data = base64.b64decode(res["access_token"])
+                            encrypted_token = token_data[:-16]
+                            tag = token_data[-16:]
+                            
+                            cipher = AES.new(encryption_key, AES.MODE_GCM, nonce=iv)
+                            return cipher.decrypt_and_verify(encrypted_token, tag).decode('utf-8')
+                        except Exception as e:
+                            api_logger.error(f"토큰 복호화 실패: {e}")
+                            api_logger.error(traceback.format_exc())
+                            return None
+                    
+                    api_logger.info("토큰 복호화 시작")
+                    token = await asyncio.get_event_loop().run_in_executor(executor, _sync_decrypt)
+                    
+                    if token:
+                        api_logger.info(f"토큰 복호화 성공: {token[:20]}...")
+                        
+                        # ✅ Step 10: Redis setex를 run_in_executor로 오프로드
+                        def _sync_token_save():
+                            try:
+                                self.redis_client.setex(token_key, 3600, token)
+                            except Exception as e:
+                                api_logger.error(f"Redis 토큰 저장 실패: {e}")
+                        
+                        await asyncio.get_event_loop().run_in_executor(executor, _sync_token_save)
+                        api_logger.info("Redis에 토큰 저장 완료")
+                    
+            except Exception as e:
+                api_logger.error(f"토큰 조회/복호화 실패: {e}")
+                api_logger.error(traceback.format_exc())
+                token = None
+                
+        if not token:
+            api_logger.error(f"Notion 토큰을 찾을 수 없습니다: {user_id}")
+            return
+        
+        api_logger.info(f"최종 토큰 확인: {token[:20]}...")
+        
+        # 2. NotionService로 요청 전송
+        try:
+            notion_service = NotionService(token=token)
+            await notion_service.append_code_analysis_to_page(
+                ai_analysis_log_page_id, 
+                analysis_summary, 
+                commit_sha
+            )
+            api_logger.info(f"Notion에 분석 결과 추가 완료: {commit_sha[:8]}")
+        except Exception as e:
+            api_logger.error(f"Notion 서비스 호출 실패: {e}")
+            api_logger.error(traceback.format_exc())

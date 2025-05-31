@@ -104,34 +104,42 @@ def analyze_code_task(files: List[Dict], owner: str, repo: str, commit_sha: str,
 async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
     """비동기 코드 분석 실행"""
     try:
-        api_logger.info("Supabase 비동기 클라이언트 생성 중...")
+        # 공개 환경변수 노출 방지 - SUPABASE_KEY 마스킹
+        masked_key = settings.SUPABASE_KEY[:10] + "..." if settings.SUPABASE_KEY else "None"
+        api_logger.info(f"코드 분석 시작 - Supabase URL: {settings.SUPABASE_URL}, Key: {masked_key}")
         
-        # 🔧 비동기 Supabase 클라이언트 사용
+        # Supabase 비동기 클라이언트 생성
         supabase = await create_async_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
         
-        api_logger.info("분석 서비스 초기화 중...")
+        # Redis 클라이언트 생성
+        redis_conn = create_redis_connection()
+        
+        # CodeAnalysisService 인스턴스 생성
         analysis_service = CodeAnalysisService(redis_conn, supabase)
         
-        api_logger.info("코드 변경 분석 시작...")
-        await analysis_service.analyze_code_changes(
-            files=files,
-            owner=owner,
-            repo=repo,
-            commit_sha=commit_sha,
-            user_id=user_id
-        )
+        api_logger.info(f"분석 대상: {len(files)}개 파일, 커밋: {commit_sha[:8]}")
         
-        api_logger.info("큐 처리 시작...")
+        # 1. 변경된 파일들을 함수 단위로 분해하고 큐에 추가
+        await analysis_service.analyze_code_changes(files, owner, repo, commit_sha, user_id)
+        
+        # 2. 큐에 있는 모든 함수들을 순차적으로 분석
         await analysis_service.process_queue()
         
-        api_logger.info("분석 완료")
-        
-        platform = "Windows" if os.name == 'nt' else "Linux/Unix"
-        return {"status": "success", "commit_sha": commit_sha, "platform": platform}
+        api_logger.info("모든 코드 분석 완료")
         
     except Exception as e:
-        api_logger.error(f"비동기 분석 실행 오류: {str(e)}")
+        api_logger.error(f"코드 분석 중 오류 발생: {str(e)}")
+        import traceback
+        api_logger.error(f"상세 오류 정보: {traceback.format_exc()}")
         raise
+    finally:
+        # ✅ Step 5: 워커 종료시 공유 ThreadPoolExecutor 정리
+        try:
+            await CodeAnalysisService.cleanup_executor()
+            api_logger.info("워커 태스크 종료 - ThreadPoolExecutor 정리 완료")
+        except Exception as cleanup_error:
+            api_logger.error(f"ThreadPoolExecutor 정리 실패: {cleanup_error}")
+            api_logger.error(traceback.format_exc())
 
 def create_optimized_worker():
     """OS별 최적화된 워커 생성"""
