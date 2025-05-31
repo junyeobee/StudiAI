@@ -230,19 +230,22 @@ class CodeAnalysisService:
         api_logger.info("함수별 분석 큐 처리 시작")
         sys.stdout.flush()
         
-        while not self.function_queue.empty():
+        # 큐 사이즈만큼(이전 방식 - 기존: empty() 체크, get() 호출)
+        total_items = self.function_queue.qsize()
+        api_logger.info(f"처리할 함수 수: {total_items}")
+        
+        for i in range(total_items):
             item = None
             try:
                 item = await self.function_queue.get()
                 await self._analyze_function(item)
+                api_logger.info(f"진행상황: {i+1}/{total_items}") 
             except Exception as e:
                 api_logger.error(f"함수 분석 처리 오류: {e}")
-                # 오류 발생 시에도 실패한 함수 정보 로깅
                 if item:
                     func_name = item.get('function_info', {}).get('name', 'unknown')
                     api_logger.error(f"실패한 함수: {func_name}")
             finally:
-                # 성공/실패 관계없이 task_done() 호출
                 if item:
                     self.function_queue.task_done()
         

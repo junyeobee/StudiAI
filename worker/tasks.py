@@ -9,7 +9,7 @@ from app.services.code_analysis_service import CodeAnalysisService
 from app.core.config import settings
 from worker.config import RQ_CONFIG
 from app.utils.logger import api_logger
-from supabase import create_client
+from supabase._async.client import create_client as create_async_client
 
 # 버퍼링 비활성화
 os.environ["PYTHONUNBUFFERED"] = "1"
@@ -41,8 +41,22 @@ redis_host = settings.REDIS_HOST
 redis_port = int(settings.REDIS_PORT)
 redis_password = settings.REDIS_PASSWORD
 
+def create_redis_connection():
+    """안정적인 Redis 연결 생성 - 타임아웃 및 재시도 설정 포함"""
+    return redis.Redis(
+        host=redis_host,
+        port=redis_port,
+        password=redis_password,
+        socket_timeout=10,  # 읽기 타임아웃
+        socket_connect_timeout=5,  # 연결 타임아웃
+        retry_on_timeout=True,
+        health_check_interval=30,
+        max_connections=20,  # 커넥션 풀 크기
+        decode_responses=False  # bytes 응답 유지 (기존 코드 호환성)
+    )
+
 # Redis 연결
-redis_conn = redis.Redis(host=redis_host, port=redis_port, password=redis_password)
+redis_conn = create_redis_connection()
 
 # RQ 큐 생성 (설정 적용)
 task_queue = Queue(
@@ -56,35 +70,49 @@ def analyze_code_task(files: List[Dict], owner: str, repo: str, commit_sha: str,
     try:
         platform = "Windows" if os.name == 'nt' else "Linux/Unix"
         api_logger.info(f"RQ 워커에서 코드 분석 시작 ({platform}): {commit_sha[:8]}, 파일 수: {len(files)}")
-        sys.stdout.flush()
         api_logger.info(f"사용자 ID: {user_id}, 저장소: {owner}/{repo}")
-        sys.stdout.flush()
 
-        asyncio.run(_analyze_code_async(files, owner, repo, commit_sha, user_id))
-        sys.stdout.flush()
-
-        api_logger.info(f"RQ 워커 코드 분석 완료 ({platform}): {commit_sha[:8]}")
-        sys.stdout.flush()
-        return {"status": "success", "commit_sha": commit_sha, "platform": platform}
+        # 🔧 이벤트 루프 안전성 개선: 중첩 루프 방지
+        loop = None
+        try:
+            # 기존 루프가 있는지 확인
+            loop = asyncio.get_running_loop()
+            api_logger.info("기존 이벤트 루프 감지됨 - 새 루프 생성")
+        except RuntimeError:
+            # 실행 중인 루프가 없음 - 정상 상황
+            pass
         
+        if loop and loop.is_running():
+            # 이미 실행 중인 루프가 있으면 새 루프 생성
+            new_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(new_loop)
+            try:
+                result = new_loop.run_until_complete(_analyze_code_async(files, owner, repo, commit_sha, user_id))
+                return result
+            finally:
+                new_loop.close()
+                # 원래 루프 복원
+                asyncio.set_event_loop(loop)
+        else:
+            # 실행 중인 루프가 없으면 직접 실행
+            return asyncio.run(_analyze_code_async(files, owner, repo, commit_sha, user_id))
+
     except Exception as e:
         api_logger.error(f"RQ 워커 코드 분석 실패: {str(e)}")
-        sys.stdout.flush()
         raise e
 
 async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
     """비동기 코드 분석 실행"""
     try:
-        api_logger.info("Supabase 클라이언트 생성 중...")
-        sys.stdout.flush()
-        supabase = create_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
+        api_logger.info("Supabase 비동기 클라이언트 생성 중...")
+        
+        # 🔧 비동기 Supabase 클라이언트 사용
+        supabase = await create_async_client(settings.SUPABASE_URL, settings.SUPABASE_KEY)
         
         api_logger.info("분석 서비스 초기화 중...")
-        sys.stdout.flush()
         analysis_service = CodeAnalysisService(redis_conn, supabase)
         
         api_logger.info("코드 변경 분석 시작...")
-        sys.stdout.flush()
         await analysis_service.analyze_code_changes(
             files=files,
             owner=owner,
@@ -94,15 +122,15 @@ async def _analyze_code_async(files: List[Dict], owner: str, repo: str, commit_s
         )
         
         api_logger.info("큐 처리 시작...")
-        sys.stdout.flush()
         await analysis_service.process_queue()
         
         api_logger.info("분석 완료")
-        sys.stdout.flush()
+        
+        platform = "Windows" if os.name == 'nt' else "Linux/Unix"
+        return {"status": "success", "commit_sha": commit_sha, "platform": platform}
         
     except Exception as e:
         api_logger.error(f"비동기 분석 실행 오류: {str(e)}")
-        sys.stdout.flush()
         raise
 
 def create_optimized_worker():
@@ -141,6 +169,9 @@ def create_optimized_worker():
 
 def start_worker():
     """RQ 워커 시작 - OS별 최적화 및 모니터링 포함"""
+    optimizer = None
+    worker = None
+    
     try:
         platform = "Windows" if os.name == 'nt' else "Linux/Unix"
         api_logger.info(f"=== RQ 최적화 워커 시작 ({platform}) ===")
@@ -175,22 +206,50 @@ def start_worker():
                 logging_level='INFO',
                 with_scheduler=True   # Linux에서는 스케줄러 활성화
             )
-        sys.stdout.flush()
             
     except KeyboardInterrupt:
         api_logger.info("워커 종료 신호 수신")
-        # Windows에서 정리 작업
-        if os.name == 'nt':
-            try:
-                if 'optimizer' in locals():
-                    optimizer.shutdown_all_workers()
-            except:
-                pass
+        
     except Exception as e:
-        api_logger.error(f"RQ 워커 시작 실패: {str(e)}")
+        api_logger.error(f"워커 실행 중 오류: {str(e)}")
         raise
+        
     finally:
-        api_logger.info("RQ 워커 종료")
+        # 🔧 확실한 정리 작업
+        api_logger.info("워커 정리 작업 시작")
+        
+        # 옵티마이저 정리
+        if optimizer:
+            try:
+                api_logger.info("옵티마이저 정리 중...")
+                if hasattr(optimizer, 'stop_monitoring'):
+                    optimizer.stop_monitoring()
+                if hasattr(optimizer, 'shutdown_all_workers'):
+                    optimizer.shutdown_all_workers()
+                api_logger.info("옵티마이저 정리 완료")
+            except Exception as e:
+                api_logger.error(f"옵티마이저 정리 중 오류: {str(e)}")
+        
+        # 워커 정리
+        if worker:
+            try:
+                api_logger.info("워커 정리 중...")
+                # 워커 연결 종료
+                if hasattr(worker, 'connection') and worker.connection:
+                    worker.connection.close()
+                api_logger.info("워커 정리 완료")
+            except Exception as e:
+                api_logger.error(f"워커 정리 중 오류: {str(e)}")
+        
+        # Redis 연결 정리
+        try:
+            api_logger.info("Redis 연결 정리 중...")
+            redis_conn.close()
+            api_logger.info("Redis 연결 정리 완료")
+        except Exception as e:
+            api_logger.error(f"Redis 연결 정리 중 오류: {str(e)}")
+        
+        api_logger.info("모든 정리 작업 완료 - 워커 종료")
 
 def start_worker_with_optimization():
     """최적화 기능이 포함된 워커 시작 - OS별 대응"""
