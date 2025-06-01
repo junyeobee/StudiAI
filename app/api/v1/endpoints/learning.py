@@ -13,7 +13,8 @@ from app.services.supa import (
     get_used_notion_db_id,
     get_ai_block_id_by_page_id,
     delete_learning_page,
-    list_all_learning_databases
+    list_all_learning_databases,
+    get_default_workspace
 )
 from app.utils.logger import api_logger
 from app.utils.notion_utils import(
@@ -132,16 +133,19 @@ async def patch_page(page_id: str, req: PageUpdateRequest, notion_service: Notio
         api_logger.error(f"학습 페이지 업데이트 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-
-
 # 완료
 @router.get("/pages/{page_id}/content")
 async def get_content(page_id: str, notion_service: NotionService = Depends(get_notion_service)):
+    """페이지 전체 내용을 마크다운 문자열로 반환"""
     try:
-        data = await notion_service.get_page_content(page_id)
-        print(data)
-        blocks = [block_content(b) for b in data["blocks"]]
-        return blocks
+        # 서비스에서 마크다운 변환까지 완료된 내용 받기
+        content = await notion_service.get_page_content_as_markdown(page_id)
+        
+        return {
+            "status": "success", 
+            "data": content,
+            "message": "페이지 내용 조회 성공"
+        }
     except Exception as e:
         api_logger.error(f"학습 페이지 콘텐츠 조회 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -166,4 +170,62 @@ async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase
         return {"status": "deleted", "page_id": page_id}
     except Exception as e:
         api_logger.error(f"학습 페이지 삭제 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/pages/{page_id}/commits")
+async def get_page_commits(page_id: str, redis: redis.Redis = Depends(get_redis), user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+    """페이지의 ai_block에 있는 커밋 분석 토글 리스트 조회"""
+    try:
+        # 1. 워크스페이스 ID 조회 (Redis → Supabase fallback)
+        workspace_id = await redis_service.get_user_workspace(user_id, redis)
+        if not workspace_id:
+            workspace_id = await get_default_workspace(user_id, supabase)
+            if not workspace_id:
+                raise HTTPException(status_code=404, detail="활성 워크스페이스를 찾을 수 없습니다.")
+        
+        # 2. 페이지 아이디를 받아서, 해당 페이지의 ai_block_id 조회
+        ai_block_id = await get_ai_block_id_by_page_id(page_id, workspace_id, supabase)
+        if not ai_block_id:
+            raise HTTPException(status_code=404, detail="AI 블록 ID를 찾을 수 없습니다.")
+        
+        # 3. ai_block_id를 받아서, 해당 페이지의 커밋 토글 리스트 조회
+        summary = await notion_service.get_page_summary(ai_block_id)
+        return {
+            "status": "success",
+            "data": summary,
+            "message": "커밋 리스트 조회 성공"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"커밋 리스트 조회 실패: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/pages/{page_id}/commits/{commit_sha}")
+async def get_commit_details(page_id: str, commit_sha: str, redis: redis.Redis = Depends(get_redis), user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+    """특정 커밋의 상세 분석 내용 조회"""
+    try:
+        # 1. 워크스페이스 ID 조회 (Redis → Supabase fallback)
+        workspace_id = await redis_service.get_user_workspace(user_id, redis)
+        if not workspace_id:
+            workspace_id = await get_default_workspace(user_id, supabase)
+            if not workspace_id:
+                raise HTTPException(status_code=404, detail="활성 워크스페이스를 찾을 수 없습니다.")
+        
+        # 2. 페이지 아이디를 받아서, 해당 페이지의 ai_block_id 조회
+        ai_block_id = await get_ai_block_id_by_page_id(page_id, workspace_id, supabase)
+        if not ai_block_id:
+            raise HTTPException(status_code=404, detail="AI 블록 ID를 찾을 수 없습니다.")
+        
+        # 3. ai_block_id와 commit_sha를 받아서, 해당 커밋의 상세 분석 내용 조회
+        commit_details = await notion_service.get_commit_details(ai_block_id, commit_sha)
+        return {
+            "status": "success",
+            "data": commit_details,
+            "message": f"커밋 {commit_sha[:8]} 상세 조회 성공"
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        api_logger.error(f"커밋 상세 조회 실패: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

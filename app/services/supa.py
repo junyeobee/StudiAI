@@ -233,12 +233,18 @@ async def update_ai_block_id(page_id: str, new_ai_block_id: str, user_id: str, s
         api_logger.error(f"AI 블록 ID 업데이트 실패: {str(e)}")
         raise DatabaseError(f"AI 블록 ID 업데이트 실패: {str(e)}")
 
-async def get_ai_block_id_by_page_id(page_id: str, user_id: str, supabase: AsyncClient) -> str:
+async def get_ai_block_id_by_page_id(page_id: str, workspace_id: str, supabase: AsyncClient) -> str:
     """페이지 ID로 AI 블록 ID 조회"""
     try:
-        res = await supabase.table("learning_pages").select("ai_block_id").eq("page_id", page_id).eq("user_id", user_id).execute()
+        # page_id와 workspace_id로 ai_block_id 조회
+        res = await supabase.table("learning_pages")\
+            .select("ai_block_id, learning_databases!inner(workspace_id)")\
+            .eq("page_id", page_id)\
+            .eq("learning_databases.workspace_id", workspace_id)\
+            .execute()
+            
         data = res.data
-        if data and "ai_block_id" in data[0]:
+        if data and len(data) > 0 and "ai_block_id" in data[0]:
             return data[0]["ai_block_id"]
         return None
     except Exception as e:

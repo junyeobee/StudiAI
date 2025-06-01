@@ -1,4 +1,99 @@
 # 페이지 속성
+def extract_text_from_rich_text(rich_text: list[dict]) -> str:
+    """rich_text 배열에서 순수 텍스트 추출"""
+    if not rich_text:
+        return ""
+    
+    text_parts = []
+    for text_obj in rich_text:
+        if text_obj.get("type") == "text":
+            text_parts.append(text_obj.get("text", {}).get("content", ""))
+    
+    return "".join(text_parts)
+
+async def get_toggle_content(toggle_block_id: str, make_request_func) -> str:
+    """토글 블록의 하위 내용을 텍스트로 변환하여 반환"""
+    try:
+        content_parts = []
+        cursor = None
+        
+        while True:
+            resp = await make_request_func(
+                "GET",
+                f"blocks/{toggle_block_id}/children",
+                params={"page_size": 100, **({"start_cursor": cursor} if cursor else {})}
+            )
+            
+            blocks = resp.get("results", [])
+            for block in blocks:
+                block_text = await convert_block_to_markdown(block, make_request_func)
+                if block_text:
+                    content_parts.append(block_text)
+            
+            if not resp.get("has_more"):
+                break
+            cursor = resp["next_cursor"]
+        
+        return "\n".join(content_parts)
+        
+    except Exception as e:
+        # 로깅은 호출하는 쪽에서 처리
+        return ""
+
+async def convert_block_to_markdown(block: dict, make_request_func) -> str:
+    """Notion 블록을 마크다운 텍스트로 변환"""
+    block_type = block.get("type")
+    
+    if block_type == "paragraph":
+        return extract_text_from_rich_text(block.get("paragraph", {}).get("rich_text", []))
+    
+    elif block_type == "heading_1":
+        text = extract_text_from_rich_text(block.get("heading_1", {}).get("rich_text", []))
+        return f"# {text}"
+    
+    elif block_type == "heading_2":
+        text = extract_text_from_rich_text(block.get("heading_2", {}).get("rich_text", []))
+        return f"## {text}"
+    
+    elif block_type == "heading_3":
+        text = extract_text_from_rich_text(block.get("heading_3", {}).get("rich_text", []))
+        return f"### {text}"
+    
+    elif block_type == "bulleted_list_item":
+        text = extract_text_from_rich_text(block.get("bulleted_list_item", {}).get("rich_text", []))
+        return f"• {text}"
+    
+    elif block_type == "numbered_list_item":
+        text = extract_text_from_rich_text(block.get("numbered_list_item", {}).get("rich_text", []))
+        return f"1. {text}"
+    
+    elif block_type == "code":
+        text = extract_text_from_rich_text(block.get("code", {}).get("rich_text", []))
+        language = block.get("code", {}).get("language", "")
+        return f"```{language}\n{text}\n```"
+    
+    elif block_type == "quote":
+        text = extract_text_from_rich_text(block.get("quote", {}).get("rich_text", []))
+        return f"> {text}"
+    
+    elif block_type == "callout":
+        text = extract_text_from_rich_text(block.get("callout", {}).get("rich_text", []))
+        emoji = block.get("callout", {}).get("icon", {}).get("emoji", "💡")
+        return f"{emoji} {text}"
+    
+    elif block_type == "divider":
+        return "---"
+    
+    # 하위 블록이 있는 경우 재귀 처리
+    if block.get("has_children"):
+        current_text = extract_text_from_rich_text(
+            block.get(block_type, {}).get("rich_text", [])
+        )
+        children_text = await get_toggle_content(block["id"], make_request_func)
+        return f"{current_text}\n{children_text}" if current_text else children_text
+    
+    return ""
+
 def serialize_page_props(props: dict) -> dict:
     r = {}
     if "title" in props:

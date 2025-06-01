@@ -7,7 +7,7 @@ import httpx
 from app.core.config import settings
 from app.core.exceptions import NotionAPIError
 from app.utils.logger import notion_logger
-from app.utils.notion_utils import markdown_to_notion_blocks
+from app.utils.notion_utils import markdown_to_notion_blocks, extract_text_from_rich_text, get_toggle_content, convert_block_to_markdown
 from app.models.database import (
     DatabaseInfo, 
     DatabaseStatus,
@@ -561,10 +561,129 @@ class NotionService:
             cursor = resp["next_cursor"]
         return {"blocks": blocks}
     
+    async def get_page_content_as_markdown(self, page_id: str) -> str:
+        """페이지의 모든 블록을 마크다운 문자열로 변환하여 반환 (커밋 분석 토글 제외)"""
+        try:
+            # 1. 페이지의 모든 블록 조회
+            page_content = await self.get_page_content(page_id)
+            blocks = page_content.get("blocks", [])
+            
+            if not blocks:
+                return "페이지에 내용이 없습니다."
+            
+            # 2. 커밋 분석 토글 블록들 필터링
+            filtered_blocks = []
+            for block in blocks:
+                # heading_3 블록이면서 "코드 분석 (" 패턴이 포함된 경우 제외
+                if (block.get("type") == "heading_3" and 
+                    block.get("heading_3", {}).get("rich_text")):
+                    
+                    title = extract_text_from_rich_text(
+                        block.get("heading_3", {}).get("rich_text", [])
+                    )
+                    
+                    # "코드 분석 (" 패턴이 포함된 토글은 제외
+                    if "코드 분석 (" in title:
+                        continue
+                
+                filtered_blocks.append(block)
+            
+            # 3. 필터링된 블록들을 마크다운 문자열로 변환
+            content_parts = []
+            for block in filtered_blocks:
+                block_text = await convert_block_to_markdown(block, self._make_request)
+                if block_text:
+                    content_parts.append(block_text)
+            
+            # 4. 전체 내용을 하나의 문자열로 결합
+            return "\n\n".join(content_parts)
+            
+        except Exception as e:
+            notion_logger.error(f"페이지 마크다운 변환 실패: {str(e)}")
+            return f"페이지 내용 조회 중 오류가 발생했습니다: {str(e)}"
+    
     # 페이지 삭제
     async def delete_page(self, page_id: str) -> None:
         """
         페이지 삭제
         """
         await self._make_request("PATCH", f"pages/{page_id}", json={"archived": True})
+
+    async def get_page_summary(self, page_id: str) -> List[str]:
+        """
+        페이지의 heading_3 토글 블록들의 제목만 반환
+        """
+        try:
+            # 1. 페이지의 모든 블록 조회
+            page_content = await self.get_page_content(page_id)
+            blocks = page_content.get("blocks", [])
+            
+            if not blocks:
+                return []
+            
+            # 2. heading_3 토글 블록들의 제목만 수집 
+            toggle_titles = []
+            for block in blocks:
+                if (block.get("type") == "heading_3" and 
+                    block.get("heading_3", {}).get("is_toggleable")):
+                    
+                    title = extract_text_from_rich_text(
+                        block.get("heading_3", {}).get("rich_text", [])
+                    )
+                    if title:
+                        toggle_titles.append(title)
+            
+            return toggle_titles
+            
+        except Exception as e:
+            notion_logger.error(f"페이지 요약 조회 실패: {str(e)}")
+            return []
+    
+    async def get_commit_details(self, page_id: str, commit_sha: str) -> str:
+        """
+        특정 커밋의 상세 분석 내용 조회 - 해당 커밋 토글 블록의 모든 하위 내용 반환
+        """
+        try:
+            # 1. 페이지의 모든 블록 조회
+            page_content = await self.get_page_content(page_id)
+            blocks = page_content.get("blocks", [])
+            
+            if not blocks:
+                return "페이지에 분석 내용이 없습니다."
+            
+            # 2. 특정 커밋 SHA에 해당하는 토글 블록 찾기
+            target_block = None
+            for block in blocks:
+                if (block.get("type") == "heading_3" and 
+                    block.get("heading_3", {}).get("is_toggleable")):
+                    
+                    title = extract_text_from_rich_text(
+                        block.get("heading_3", {}).get("rich_text", [])
+                    )
+                    
+                    # 커밋 SHA가 제목에 포함되어 있는지 확인
+                    if commit_sha.lower() in title.lower():
+                        target_block = block
+                        break
+            
+            if not target_block:
+                return f"커밋 {commit_sha}에 대한 분석 결과를 찾을 수 없습니다."
+            
+            # 3. 해당 토글 블록의 하위 내용 조회
+            commit_content = await get_toggle_content(target_block["id"], self._make_request)
+            
+            if not commit_content:
+                return f"커밋 {commit_sha}의 분석 내용이 비어있습니다."
+            
+            # 4. 결과 포맷팅
+            toggle_title = extract_text_from_rich_text(
+                target_block.get("heading_3", {}).get("rich_text", [])
+            )
+            
+            result = f"# {toggle_title}\n\n{commit_content}"
+            return result
+            
+        except Exception as e:
+            notion_logger.error(f"커밋 상세 조회 실패: {str(e)}")
+            return f"커밋 상세 조회 중 오류가 발생했습니다: {str(e)}"
         
