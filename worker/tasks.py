@@ -62,7 +62,7 @@ redis_conn = create_redis_connection()
 task_queue = Queue(
     'code_analysis', 
     connection=redis_conn,
-    default_timeout=1800  # 30분 (로컬 LLM 환경 최적화)
+    default_timeout=60*60*3  # 3시간 (로컬 LLM 환경 최적화)
 )
 
 def analyze_code_task(files: List[Dict], owner: str, repo: str, commit_sha: str, user_id: str):
@@ -164,8 +164,8 @@ def create_optimized_worker():
         api_logger.info("Unix/Linux Worker 생성")
     
     # ✅ Worker 생성 후 속성으로 타임아웃 설정 (30분, 로컬 LLM 환경 최적화)
-    worker.job_timeout = 1800
-    api_logger.info("Worker job_timeout 설정 완료: 1800초 (30분)")
+    worker.job_timeout = 60*60*3
+    api_logger.info("Worker job_timeout 설정 완료: 3시간")
     
     # 워커 설정 적용
     worker.default_result_ttl = worker_config['result_ttl']
