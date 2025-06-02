@@ -26,6 +26,7 @@ from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
 from fastapi import Depends
 from app.api.v1.dependencies.auth import require_user
+from app.api.v1.dependencies.workspace import get_user_workspace, get_user_workspace_with_fallback
 from app.api.v1.dependencies.notion import get_notion_service, get_notion_db_list
 from app.utils.logger import api_logger
 from app.core.redis_connect import get_redis
@@ -35,7 +36,7 @@ router = APIRouter()
 redis_service = RedisService()
 
 @router.get("/pages")
-async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:str = Depends(require_user), current: bool = False, db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def list_learning_pages(workspace_id: str = Depends(get_user_workspace), redis: redis.Redis = Depends(get_redis), current: bool = False, db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """
     학습 페이지 목록 조회
     - current=true : 현재 used DB 기준
@@ -43,7 +44,6 @@ async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:st
     둘 다 지정시 db_id 결과
     """
     try:
-        workspace_id = await redis_service.get_user_workspace(user_id, redis)
         target_db_id = db_id
         if not target_db_id:
             if current:
@@ -70,14 +70,11 @@ async def list_learning_pages(redis: redis.Redis = Depends(get_redis),user_id:st
         raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
-async def create_pages(req: LearningPagesRequest, pages: list = Depends(get_notion_db_list), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), user_id: str = Depends(require_user), redis = Depends(get_redis)):
+async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(get_user_workspace), pages: list = Depends(get_notion_db_list), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
     notion_db_id = req.notion_db_id
     if notion_db_id not in pages:
         raise HTTPException(400, "학습 페이지 생성 실패: 유효한 DB가 아닙니다.")
     results = []
-    
-    # 워크스페이스 ID 조회 (캐시 무효화용)
-    workspace_id = await redis_service.get_user_workspace(user_id, redis)
 
     for plan in req.plans:
         try:
@@ -153,19 +150,15 @@ async def get_content(page_id: str, notion_service: NotionService = Depends(get_
 
 # 페이지 삭제
 @router.delete("/pages/{page_id}")
-async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), user_id: str = Depends(require_user), redis = Depends(get_redis)):
+async def delete_page(page_id: str, workspace_id: str = Depends(get_user_workspace), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
     try:
-        # 워크스페이스 ID 조회 (캐시 무효화용)
-        workspace_id = await redis_service.get_user_workspace(user_id, redis)
-        
         await notion_service.delete_page(page_id)
         await delete_learning_page(page_id, supabase)
         
         # 페이지가 삭제되었으므로 워크스페이스 캐시 무효화
-        if workspace_id:
-            cache_key = f"workspace:{workspace_id}:learning_data"
-            await redis_service.delete_key(cache_key, redis)
-            api_logger.info(f"페이지 삭제로 워크스페이스 캐시 무효화: {workspace_id}")
+        cache_key = f"workspace:{workspace_id}:learning_data"
+        await redis_service.delete_key(cache_key, redis)
+        api_logger.info(f"페이지 삭제로 워크스페이스 캐시 무효화: {workspace_id}")
         
         return {"status": "deleted", "page_id": page_id}
     except Exception as e:
@@ -173,16 +166,9 @@ async def delete_page(page_id: str, supabase: AsyncClient = Depends(get_supabase
         raise HTTPException(status_code=500, detail=str(e))
     
 @router.get("/pages/{page_id}/commits")
-async def get_page_commits(page_id: str, redis: redis.Redis = Depends(get_redis), user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def get_page_commits(page_id: str, workspace_id: str = Depends(get_user_workspace_with_fallback), redis: redis.Redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """페이지의 ai_block에 있는 커밋 분석 토글 리스트 조회"""
     try:
-        # 1. 워크스페이스 ID 조회 (Redis → Supabase fallback)
-        workspace_id = await redis_service.get_user_workspace(user_id, redis)
-        if not workspace_id:
-            workspace_id = await get_default_workspace(user_id, supabase)
-            if not workspace_id:
-                raise HTTPException(status_code=404, detail="활성 워크스페이스를 찾을 수 없습니다.")
-        
         # 2. 페이지 아이디를 받아서, 해당 페이지의 ai_block_id 조회
         ai_block_id = await get_ai_block_id_by_page_id(page_id, workspace_id, supabase)
         if not ai_block_id:
@@ -202,16 +188,9 @@ async def get_page_commits(page_id: str, redis: redis.Redis = Depends(get_redis)
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/pages/{page_id}/commits/{commit_sha}")
-async def get_commit_details(page_id: str, commit_sha: str, redis: redis.Redis = Depends(get_redis), user_id: str = Depends(require_user), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def get_commit_details(page_id: str, commit_sha: str, workspace_id: str = Depends(get_user_workspace_with_fallback), redis: redis.Redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """특정 커밋의 상세 분석 내용 조회"""
     try:
-        # 1. 워크스페이스 ID 조회 (Redis → Supabase fallback)
-        workspace_id = await redis_service.get_user_workspace(user_id, redis)
-        if not workspace_id:
-            workspace_id = await get_default_workspace(user_id, supabase)
-            if not workspace_id:
-                raise HTTPException(status_code=404, detail="활성 워크스페이스를 찾을 수 없습니다.")
-        
         # 2. 페이지 아이디를 받아서, 해당 페이지의 ai_block_id 조회
         ai_block_id = await get_ai_block_id_by_page_id(page_id, workspace_id, supabase)
         if not ai_block_id:

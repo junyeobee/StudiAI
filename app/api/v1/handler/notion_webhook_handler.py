@@ -3,6 +3,7 @@ Notion 웹훅 이벤트 핸들러
 """
 from app.utils.logger import api_logger
 from app.services.redis_service import RedisService
+from app.services.workspace_cache_service import workspace_cache_service
 from app.services.supa import (
     delete_learning_page_by_system_id,
     clear_ai_block_id,
@@ -19,6 +20,103 @@ class NotionWebhookHandler:
     
     def __init__(self):
         self.redis_service = RedisService()
+    
+    async def process_webhook_event(self, payload: dict, supabase: AsyncClient, redis_client: redis.Redis):
+        """웹훅 이벤트 처리 로직"""
+        try:
+            workspace_id = payload.get("workspace_id")
+            event_type = payload.get("type")
+            entity = payload.get("entity", {})
+            entity_id = entity.get("id")
+            
+            if not entity_id:
+                api_logger.warning("entity.id가 없는 웹훅 이벤트")
+                return
+            
+            # WorkspaceCacheService를 사용한 학습 데이터 조회
+            learning_data = await workspace_cache_service.get_workspace_learning_data(workspace_id, supabase, redis_client)
+            entity_map = learning_data.get("entity_map", {})
+            
+            # entity_id가 학습 관련 엔티티인지 확인
+            entity_info = entity_map.get(entity_id)
+            
+            # entity_map에 없으면 DB에서 직접 조회 (Fallback)
+            if not entity_info:
+                entity_info = await self.check_entity_in_database(entity_id, workspace_id, supabase)
+                
+                if entity_info:
+                    # 발견된 엔티티를 캐시에 추가하고 캐시 갱신
+                    api_logger.info(f"새로운 학습 엔티티 발견, 캐시 갱신: {entity_id}")
+                    await workspace_cache_service.refresh_workspace_cache(workspace_id, supabase, redis_client)
+                else:
+                    api_logger.info(f"학습과 무관한 엔티티: {entity_id}, 이벤트 무시")
+                    return
+            
+            # 학습 관련 엔티티 발견!
+            api_logger.info(f"학습 관련 이벤트 감지: {event_type} - {entity_info['type']} ({entity_id})")
+            
+            # 이벤트 타입별 처리
+            match event_type:
+                case "page.deleted":
+                    await self.handle_page_deleted(entity_info, payload, supabase, redis_client)
+                case "page.content_updated":
+                    await self.handle_page_content_updated(entity_info, payload, supabase, redis_client)
+                case "database.deleted":
+                    await self.handle_database_deleted(entity_info, payload, supabase, redis_client)
+                case "database.updated":
+                    await self.handle_database_updated(entity_info, payload, supabase, redis_client)
+                case _:
+                    api_logger.info(f"처리하지 않는 이벤트 타입: {event_type}")
+            
+            # 처리 완료 후 캐시 무효화
+            await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis_client)
+            api_logger.info(f"이벤트 처리 완료 및 캐시 무효화: {event_type} - {entity_info['type']}")
+            
+        except Exception as e:
+            api_logger.error(f"웹훅 이벤트 처리 실패: {str(e)}")
+    
+    async def check_entity_in_database(self, entity_id: str, workspace_id: str, supabase: AsyncClient) -> dict:
+        """entity_id가 학습 관련 엔티티인지 DB에서 직접 조회 (Fallback)"""
+        try:
+            # 1. 학습 DB인지 확인
+            db_result = await supabase.table("learning_databases").select("*").eq("db_id", entity_id).eq("workspace_id", workspace_id).is_("orphaned_at", None).execute()
+            if db_result.data:
+                db = db_result.data[0]
+                return {"type": "database", "db_id": db["db_id"], "system_id": db["id"]}
+            
+            # 2. DB 부모 페이지인지 확인
+            parent_page_result = await supabase.table("learning_databases").select("*").eq("parent_page_id", entity_id).eq("workspace_id", workspace_id).is_("orphaned_at", None).execute()
+            if parent_page_result.data:
+                db = parent_page_result.data[0]
+                return {"type": "db_parent_page", "db_id": db["db_id"], "system_id": db["id"]}
+            
+            # 3. 학습 페이지인지 확인 - learning_databases와 조인해서 workspace_id와 orphaned_at 확인
+            page_result = await supabase.table("learning_pages").select("*, learning_databases!inner(workspace_id, db_id)").eq("page_id", entity_id).eq("learning_databases.workspace_id", workspace_id).is_("learning_databases.orphaned_at", None).execute()
+            if page_result.data:
+                page = page_result.data[0]
+                return {
+                    "type": "learning_page", 
+                    "page_id": page["page_id"], 
+                    "system_id": page["id"], 
+                    "db_id": page["learning_db_id"]
+                }
+            
+            # 4. AI 블록인지 확인 - learning_pages와 learning_databases 조인
+            ai_block_result = await supabase.table("learning_pages").select("*, learning_databases!inner(workspace_id, db_id)").eq("ai_block_id", entity_id).eq("learning_databases.workspace_id", workspace_id).is_("learning_databases.orphaned_at", None).execute()
+            if ai_block_result.data:
+                page = ai_block_result.data[0]
+                return {
+                    "type": "ai_block",
+                    "page_id": page["page_id"],
+                    "system_id": page["id"], 
+                    "db_id": page["learning_db_id"]
+                }
+            
+            return None
+            
+        except Exception as e:
+            api_logger.error(f"엔티티 DB 조회 실패: {str(e)}")
+            return None
     
     async def handle_page_deleted(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient, redis_client: redis.Redis) -> None:
         """페이지 삭제 이벤트 처리"""

@@ -27,7 +27,7 @@ if not api_key:
 log = logging.getLogger("mcp")
 logging.basicConfig(level=logging.INFO)
 
-STUDYAI_API = "http://localhost:8000"
+STUDYAI_API = "https://winning-tahr-bursting.ngrok-free.app"
 
 mcp = FastMCP(
     name="studyai",
