@@ -27,10 +27,11 @@ from supabase._async.client import AsyncClient
 from fastapi import Depends
 from app.api.v1.dependencies.auth import require_user
 from app.api.v1.dependencies.workspace import get_user_workspace, get_user_workspace_with_fallback
-from app.api.v1.dependencies.notion import get_notion_service, get_notion_db_list
+from app.api.v1.dependencies.notion import get_notion_service
 from app.utils.logger import api_logger
 from app.core.redis_connect import get_redis
 from app.services.redis_service import RedisService
+from app.services.workspace_cache_service import workspace_cache_service
 
 router = APIRouter()
 redis_service = RedisService()
@@ -70,10 +71,17 @@ async def list_learning_pages(workspace_id: str = Depends(get_user_workspace), r
         raise HTTPException(500, str(e))
 
 @router.post("/pages/create")
-async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(get_user_workspace), pages: list = Depends(get_notion_db_list), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
+async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(get_user_workspace), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
     notion_db_id = req.notion_db_id
-    if notion_db_id not in pages:
+    
+    # WorkspaceCacheService를 사용해서 DB 목록 조회
+    learning_data = await workspace_cache_service.get_workspace_learning_data(workspace_id, supabase, redis)
+    databases = learning_data.get("databases", [])
+    valid_db_ids = [db.get("db_id") for db in databases]
+    
+    if notion_db_id not in valid_db_ids:
         raise HTTPException(400, "학습 페이지 생성 실패: 유효한 DB가 아닙니다.")
+    
     results = []
 
     for plan in req.plans:
@@ -98,8 +106,7 @@ async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(ge
 
     # 새 페이지가 생성되었으므로 워크스페이스 캐시 무효화
     if workspace_id and any(result.get("saved") for result in results):
-        cache_key = f"workspace:{workspace_id}:learning_data"
-        await redis_service.delete_key(cache_key, redis)
+        await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis)
         api_logger.info(f"새 페이지 생성으로 워크스페이스 캐시 무효화: {workspace_id}")
 
     return {

@@ -3,7 +3,7 @@ import logging, httpx
 from strenum import StrEnum
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.prompts import base
-from pydantic import ValidationError
+from pydantic import ValidationError, BaseModel
 #나중에 모델 -> dict로 변경할거임(배포용은 프로젝트 구조 없어서 모델 사용 불가)
 from app.models.learning import LearningPagesRequest, PageUpdateRequest
 from app.models.database import DatabaseCreate, DatabaseUpdate
@@ -54,6 +54,13 @@ class Group(StrEnum):
     WEB = "webhooks"
     NOTION_SETTINGS = "notion_settings"
     AUTH = "auth"
+    GITHUB_WEBHOOK = "github_webhook"
+
+# GitHub 웹훅 생성용 모델
+class GitHubWebhookCreate(BaseModel):
+    repo_url: str
+    learning_db_id: str
+    events: list[str] = ["push"]
 
 # 각 endpoint에 대한 Action Map
 ACTION_MAP: dict[Group, dict[str, Route]] = {
@@ -87,6 +94,10 @@ ACTION_MAP: dict[Group, dict[str, Route]] = {
     },
     Group.AUTH :{
         "get_token" : {"method":"GET", "path":lambda p:f"/oauth/{p['provider']}", "needs_json":False},
+    },
+    Group.GITHUB_WEBHOOK: {
+        "create": {"method":"POST", "path":_const("/"), "needs_json":True},
+        "repos": {"method":"GET", "path":_const("/repos"), "needs_json":False},
     }
 }
 
@@ -95,6 +106,7 @@ PAYLOAD_MODEL = {
     (Group.PAGE, "update"): PageUpdateRequest,
     (Group.DB, "create"): DatabaseCreate,
     (Group.DB, "update"): DatabaseUpdate,
+    (Group.GITHUB_WEBHOOK, "create"): GitHubWebhookCreate,
 }
 
 EXAMPLE_MAP: dict[str, str] = {
@@ -163,6 +175,17 @@ EXAMPLE_MAP: dict[str, str] = {
         "토큰 발급 링크 반환"
     ),
     
+    # GitHub 웹훅 생성
+    "github_webhook_tool.create": (
+        "필수: repo_url, learning_db_id | 선택: events\n"
+        "{\"payload\":{\"repo_url\":\"https://github.com/owner/repo\",\"learning_db_id\":\"notion_db_id\",\"events\":[\"push\"]}}"
+    ),
+    
+    # GitHub 저장소 목록 조회
+    "github_webhook_tool.repos": (
+        "파라미터 불필요: 사용 가능한 GitHub 저장소 목록 조회"
+    ),
+    
 }
 USER_GUIDE : dict[str, str] = {
     "default" : (
@@ -209,6 +232,13 @@ USER_GUIDE : dict[str, str] = {
         "[웹훅 중지]: 웹훅을 중지합니다.\n"
         "[웹훅 확인]: 웹훅 상태를 확인합니다.\n"
         "[웹훅 재시도]: 웹훅을 재시도합니다."
+    ),
+    "GitHub_Webhook" : (
+        "GitHub 웹훅을 관리합니다.\n"
+        "GitHub 저장소의 커밋 이벤트를 감지하여 자동으로 Notion 페이지에 커밋 분석을 추가합니다:\n"
+        "[웹훅 생성]: GitHub 저장소에 웹훅을 생성하고 학습 DB와 연결합니다.\n"
+        "[저장소 목록 조회]: 사용 가능한 GitHub 저장소 목록을 조회합니다.\n"
+        "웹훅 생성 시 repo_url(저장소 URL)과 learning_db_id(연결할 학습 DB ID)가 필요합니다."
     ),
 }
 ERROR_MSG = {
@@ -306,12 +336,16 @@ async def notion_settings_tool(action: str, params: dict[str, Any]) -> str:
 async def auth_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.AUTH, action, params)
 
+@mcp.tool(description="GitHub 웹훅 관련 액션 처리 (create|repos)")
+async def github_webhook_tool(action: str, params: dict[str, Any]) -> str:
+    return await dispatch(Group.GITHUB_WEBHOOK, action, params)
+
 @mcp.tool(description="요청 예시(액션명.기능 -> 파라미터 형식 반환)")
 def helper(action: str) -> str:
     examples = EXAMPLE_MAP
     return examples.get(action, "지원 안 함")
 
-@mcp.tool(description="사용자 가이드 제공, params.action 파라미터 미입력시 default 가이드, 입력시(Databases|Page|Notion_Settings|Auth|Webhook) 해당 가이드 반환")
+@mcp.tool(description="사용자 가이드 제공, params.action 파라미터 미입력시 default 가이드, 입력시(Databases|Page|Notion_Settings|Auth|Webhook|GitHub_Webhook) 해당 가이드 반환")
 def user_guide(action: str = "default") -> str:
     return USER_GUIDE.get(action, "지원 안 함")
 

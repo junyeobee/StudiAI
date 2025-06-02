@@ -159,7 +159,7 @@ async def update_database(db_id: str, db_update: DatabaseUpdate, workspace_id: s
             db_info = await update_learning_database(db_id, update_data, supabase, workspace_id)
         else:
             db_info = await get_db_info_by_id(db_id, supabase, workspace_id)
-            
+        await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis)
         if not db_info:
             raise HTTPException(
                 status_code=404,
@@ -190,6 +190,7 @@ async def activate_database(db_id: str, workspace_id: str = Depends(get_user_wor
     """데이터베이스 활성화"""
     try:
         result = await update_learning_database_status(db_id, "used", supabase, workspace_id)
+        await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis)
         if not result:
             raise HTTPException(status_code=404, detail="데이터베이스를 찾을 수 없습니다.")
         return {"status": "success", "message": "데이터베이스가 활성화되었습니다."}
