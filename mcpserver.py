@@ -70,6 +70,8 @@ ACTION_MAP: dict[Group, dict[str, Route]] = {
         "update": {"method":"PATCH", "path":lambda p:f"/{p['page_id']}", "needs_json":True},
         "delete": {"method":"DELETE", "path":lambda p:f"/{p['page_id']}", "needs_json":False},
         "get": {"method":"GET", "path":lambda p:f"/{p['page_id']}/content", "needs_json":False},
+        "commits": {"method":"GET", "path":lambda p:f"/{p['page_id']}/commits", "needs_json":False},
+        "commit_sha": {"method":"GET", "path":lambda p:f"/{p['page_id']}/commits/{p['commit_sha']}", "needs_json":False},
     },
     Group.DB: {
         "list": {"method":"GET", "path":_const("/available"), "needs_json":False},
@@ -185,7 +187,16 @@ EXAMPLE_MAP: dict[str, str] = {
     "github_webhook_tool.repos": (
         "파라미터 불필요: 사용 가능한 GitHub 저장소 목록 조회"
     ),
-    
+
+    # 페이지 커밋 목록 조회
+    "page_tool.commits": (
+        "params.page_id 파라미터 넣을 시 특정 페이지의 커밋 목록 조회"
+    ),
+
+    # 페이지 커밋 내용 조회
+    "page_tool.commit_sha": (
+        "params.page_id, params.commit_sha 파라미터 넣을 시 특정 페이지의 특정 커밋 내용 조회"
+    ),
 }
 USER_GUIDE : dict[str, str] = {
     "default" : (
@@ -223,7 +234,9 @@ USER_GUIDE : dict[str, str] = {
         "[학습 페이지 생성]: AI 요약을 포함한 페이지를 생성합니다.\n"
         "[학습 페이지 수정]: 페이지 내용을 수정합니다. summary 필드는 AI 분석 결과 섹션에 내용을 추가합니다.\n"
         "[학습 페이지 삭제]: 페이지를 삭제합니다.\n"
-        "[학습 페이지 조회]: 페이지 내용을 확인합니다."
+        "[학습 페이지 조회]: 페이지 내용을 확인합니다.\n"
+        "[학습 페이지 커밋 목록 조회]: 페이지의 커밋 목록을 조회합니다.\n"
+        "[학습 페이지 커밋 내용 조회]: 페이지의 특정 커밋 내용을 조회합니다."
     ),
     "Webhook" : (
         "웹훅을 관리합니다.\n"
@@ -316,7 +329,7 @@ async def dispatch(group: Group, action: str, params: dict) -> str:
         return f"{group.value} {action} 실패: {e}"
 
 # ─────────────────────── MCP 툴 ───────────────────────
-@mcp.tool(description="Notion 페이지 관련 액션 처리 (list|create|update|delete|get)")
+@mcp.tool(description="Notion 페이지 관련 액션 처리 (list|create|update|delete|get|commits|commit_sha)")
 async def page_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.PAGE, action, params)
 

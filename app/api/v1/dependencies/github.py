@@ -20,7 +20,7 @@ async def get_github_webhook_service(
     try:
         # 먼저 Redis에서 토큰 조회 시도
         try:
-            token = await redis_service.get_token(user_id, redis)
+            token = await redis_service.get_token(user_id,"github",redis)
         except Exception as e:
             pass
         
@@ -31,7 +31,7 @@ async def get_github_webhook_service(
             # 조회한 토큰을 Redis에 저장 (1시간 만료)
             if token:
                 try:
-                    await redis_service.set_token(user_id, token, redis, expire_seconds=3600)
+                    await redis_service.set_token(user_id, token, "github", redis, expire_seconds=3600)
                 except Exception as e:
                     pass
         else:

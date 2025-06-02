@@ -190,17 +190,15 @@ class NotionWebhookHandler:
     async def handle_database_updated(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient, redis_client: redis.Redis) -> None:
         """데이터베이스 업데이트 이벤트 처리"""
         try:
-            system_id = entity_info.get("system_id")  # 시스템 UUID
-            db_id = entity_info.get("db_id")  # 실제 Notion DB ID
+            system_id = entity_info.get("system_id")
+            db_id = entity_info.get("db_id")
             entity_id = payload.get("entity", {}).get("id")
             workspace_id = payload.get("workspace_id")
             
             api_logger.info(f"데이터베이스 업데이트 처리 시작: {entity_id}")
             
-            # 트리거로 자동 업데이트되므로 수동 업데이트 불필요
             api_logger.info(f"데이터베이스 업데이트 감지 (트리거 자동 처리): {db_id} (시스템 ID: {system_id})")
             
-            # 업데이트는 캐시 무효화 불필요 (entity_map 변경 없음)
             api_logger.info(f"데이터베이스 업데이트 처리 완료: {entity_id}")
             
         except Exception as e:
@@ -208,8 +206,8 @@ class NotionWebhookHandler:
     
     async def _handle_learning_page_deleted(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient) -> None:
         """학습 페이지 삭제 처리"""
-        system_id = entity_info.get("system_id")  # 시스템 UUID
-        page_id = entity_info.get("page_id")  # 실제 Notion Page ID
+        system_id = entity_info.get("system_id")
+        page_id = entity_info.get("page_id")
         
         # supa.py 함수 사용
         success = await delete_learning_page_by_system_id(system_id, supabase)
@@ -221,8 +219,8 @@ class NotionWebhookHandler:
     
     async def _handle_ai_block_deleted(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient) -> None:
         """AI 블록 삭제 처리"""
-        system_id = entity_info.get("system_id")  # 페이지의 시스템 UUID
-        page_id = entity_info.get("page_id")  # 실제 Notion Page ID
+        system_id = entity_info.get("system_id")
+        page_id = entity_info.get("page_id")
         
         # supa.py 함수 사용
         success = await clear_ai_block_id(system_id, supabase)

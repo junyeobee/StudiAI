@@ -1,6 +1,7 @@
 """
 Notion API 연동 서비스
 """
+import asyncio
 from typing import Optional, List, Dict, Any
 from datetime import datetime, date
 import httpx
@@ -21,7 +22,7 @@ from app.models.learning import (
 from app.utils.retry import async_retry
 
 class NotionService:
-    def __init__(self, token: str):
+    def __init__(self, token: str, timeout_seconds: int = 60):
         self.api_key = token
         self.api_version = settings.NOTION_API_VERSION
         self.base_url = "https://api.notion.com/v1"
@@ -30,6 +31,8 @@ class NotionService:
             "Notion-Version": self.api_version,
             "Content-Type": "application/json"
         }
+        self.timeout = httpx.Timeout(timeout_seconds, connect=10.0)
+
     # 노션 API 요청 공통 메서드
     @async_retry(max_retries=3, delay=1.0, backoff=2.0)
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
@@ -54,6 +57,32 @@ class NotionService:
                 f"   ▶ Error : {text}"
             )
             raise NotionAPIError(f"API 요청 실패: {text}")
+        
+    
+    # 블록 청크별 추가 헬퍼 메서드
+    async def _patch_children_in_chunks(
+        self, 
+        parent_block_id: str, 
+        children_blocks: List[Dict[str, Any]], 
+        chunk_size: int, 
+        delay: float
+    ) -> None:
+        """블록을 청크별로 나누어 지연 시간을 두고 추가하는 헬퍼 메서드"""
+        for i in range(0, len(children_blocks), chunk_size):
+            chunk = children_blocks[i:i + chunk_size]
+            
+            await self._make_request(
+                "PATCH",
+                f"blocks/{parent_block_id}/children",
+                json={"children": chunk}
+            )
+            
+            chunk_number = i // chunk_size + 1
+            notion_logger.info(f"블록 청크 {chunk_number} 처리 완료 ({len(chunk)}개 블록)")
+            
+            # 마지막 청크가 아니면 지연
+            if i + chunk_size < len(children_blocks):
+                await asyncio.sleep(delay)
         
     
     async def get_workspace_top_pages(self) -> List[Dict]:
@@ -280,14 +309,8 @@ class NotionService:
             }
         ])
 
-        # 3) 모든 블록들을 한 번에 페이지에 추가
-        append_resp = await self._make_request(
-            "PATCH",
-            f"blocks/{page_id}/children",
-            json={"children": blocks}
-        )
-        if not append_resp :
-            raise NotionAPIError(f"블록 추가 실패: {append_resp}")
+        # 3) 모든 블록들을 50개씩 나누어서 페이지에 추가
+        await self._patch_children_in_chunks(page_id, blocks, 50, 0.2)
 
         # 4) 📄 종합 분석 로그 페이지를 별도로 생성
         ai_analysis_page_props = {
@@ -305,14 +328,9 @@ class NotionService:
         )
         ai_analysis_log_page_id = ai_page_resp["id"]
 
-        # 5) 마크다운을 노션 블록으로 변환하여 메인 페이지에 직접 추가
+        # 5) 마크다운을 노션 블록으로 변환하여 메인 페이지에 50개씩 추가
         summary_blocks = markdown_to_notion_blocks(plan.summary)
-        
-        await self._make_request(
-            "PATCH",
-            f"blocks/{page_id}/children",
-            json={"children": summary_blocks}
-        )
+        await self._patch_children_in_chunks(page_id, summary_blocks, 50, 0.2)
 
         # 6) 종합 분석 로그 페이지에는 기본 안내 내용만 추가
         log_blocks = [
@@ -335,11 +353,7 @@ class NotionService:
             }
         ]
         
-        await self._make_request(
-            "PATCH",
-            f"blocks/{ai_analysis_log_page_id}/children",
-            json={"children": log_blocks}
-        )
+        await self._patch_children_in_chunks(ai_analysis_log_page_id, log_blocks, 50, 0.2)
 
         return page_id, ai_analysis_log_page_id
     
@@ -455,15 +469,9 @@ class NotionService:
                         "checked": False
                     }
                 })
-            payload = {
-                "children": new_todos,
-                "after" : quote_block['id']
-            }
-            await self._make_request(
-                "PATCH",
-                f"blocks/{page_id}/children",
-                json=payload
-            )
+            
+            if new_todos:
+                await self._patch_children_in_chunks(page_id, new_todos, 50, 0.2)
 
     # 요약 페이지 업데이트
     async def update_ai_summary_by_page(self, page_id: str, summary: str) -> None:
@@ -471,11 +479,7 @@ class NotionService:
         MarkDown 형식의 요약 내용을 Notion 블록으로 변환하여 학습 페이지에 추가 (항상 페이지 마지막 블록에 쌓임)
         """
         summary_blocks = markdown_to_notion_blocks(summary)
-        await self._make_request(
-            "PATCH",
-            f"blocks/{page_id}/children",
-            json={"children": summary_blocks}
-        )
+        await self._patch_children_in_chunks(page_id, summary_blocks, 50, 0.2)
 
     # 학습 페이지 종합 업데이트
     async def update_learning_page_comprehensive(self, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
@@ -531,19 +535,9 @@ class NotionService:
         # 4. 생성된 토글 블록의 ID 추출
         toggle_block_id = toggle_response["results"][0]["id"]
         
-        # 5. content_blocks를 100개씩 나누어서 토글 블록에 추가
-        max_blocks_per_request = 100
-        for i in range(0, len(content_blocks), max_blocks_per_request):
-            chunk = content_blocks[i:i + max_blocks_per_request]
-            
-            await self._make_request(
-                "PATCH",
-                f"blocks/{toggle_block_id}/children",
-                json={"children": chunk}
-            )
-            
-            notion_logger.info(f"블록 청크 {i//max_blocks_per_request + 1} 추가 완료 ({len(chunk)}개 블록)")
-        
+        # 5. content_blocks를 50개씩 나누어서 토글 블록에 추가
+        await self._patch_children_in_chunks(toggle_block_id, content_blocks, 50, 0.2)
+
         notion_logger.info(f"코드 분석 결과 추가 완료: {commit_sha[:8]} (총 {len(content_blocks)}개 블록)")
 
     # 페이지 메타 및 블록 조회

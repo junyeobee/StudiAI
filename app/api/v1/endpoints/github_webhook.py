@@ -8,6 +8,8 @@ from app.api.v1.dependencies.github import get_github_webhook_service
 from app.utils.logger import api_logger
 from app.utils.github_webhook_helper import GithubWebhookHelper
 from app.api.v1.handler.github_webhook_handler import GitHubWebhookHandler
+from app.core.redis_connect import get_redis
+import redis
 
 router = APIRouter()
 public_router = APIRouter()
@@ -20,7 +22,8 @@ async def create_webhook(
     events: list[str] = Body(default=["push"], description="구독할 이벤트 목록"),
     user_id: str = Depends(require_user),
     supabase: AsyncClient = Depends(get_supabase),
-    github_service: GitHubWebhookService = Depends(get_github_webhook_service)
+    github_service: GitHubWebhookService = Depends(get_github_webhook_service),
+    redis_client: redis.Redis = Depends(get_redis)
 ):
     """GitHub 웹훅 등록 + 메타 저장(db_webhooks)."""
     try:
@@ -58,7 +61,16 @@ async def create_webhook(
         res = await supabase.table("db_webhooks").upsert(webhook_record).execute()
         record_id = res.data[0]["id"] if res.data else webhook_record["id"]
 
-        # 4) Location 헤더
+        # 4) Redis에 레포별 DB ID 저장
+        try:
+            redis_key = f"user:{user_id}:{repo_name}:db_id"
+            redis_client.setex(redis_key, 3600 * 24 * 7, learning_db_id)  # 7일 보관
+            api_logger.info(f"Redis 키 저장 완료: {redis_key} -> {learning_db_id}")
+        except Exception as e:
+            api_logger.error(f"Redis 저장 실패: {e}")
+            # Redis 실패해도 웹훅 등록은 성공으로 처리
+
+        # 5) Location 헤더
         response.headers["Location"] = f"/github_webhook/{record_id}"
 
         return {

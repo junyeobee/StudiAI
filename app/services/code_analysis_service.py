@@ -492,7 +492,7 @@ class CodeAnalysisService:
             
             # 파일 분석 완료시 Notion 업데이트
             if remaining == 0:
-                await self._handle_file_analysis_complete(func_info, user_id, commit_sha)
+                await self._handle_file_analysis_complete(func_info, user_id, commit_sha, item['repo'])
                 
         except Exception as e:
             # ✅ Step 4: 실패시에도 pending 카운터 감소
@@ -754,7 +754,7 @@ class CodeAnalysisService:
         return ""
     
     # ✅ Step 4: 파일 완료 처리 로직 분리
-    async def _handle_file_analysis_complete(self, func_info: Dict, user_id: str, commit_sha: str):
+    async def _handle_file_analysis_complete(self, func_info: Dict, user_id: str, commit_sha: str, repo: str):
         """파일의 모든 함수 분석 완료시 처리"""
         filename = func_info['filename']
         api_logger.info(f"파일 '{filename}' 모든 함수 분석 완료 - Notion 업데이트 시작")
@@ -764,7 +764,7 @@ class CodeAnalysisService:
             file_summary = await self._generate_file_level_analysis(filename, user_id, commit_sha)
             
             # Notion AI 요약 블록 업데이트
-            await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha)
+            await self._update_notion_ai_block(filename, file_summary, user_id, commit_sha, repo)
             
             # 아키텍처 개선 제안 생성
             await self._generate_architecture_suggestions(filename, file_summary, user_id)
@@ -1067,7 +1067,7 @@ LLM 호출 오류: {e}
 로컬 LLM 서버 상태를 확인하세요.
 """
 
-    async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str, commit_sha: str):
+    async def _update_notion_ai_block(self, filename: str, file_summary: str, user_id: str, commit_sha: str, repo: str):
         """Notion AI 요약 블록 업데이트"""
         try:
             api_logger.info(f"파일 '{filename}' Notion 업데이트 시작")
@@ -1080,7 +1080,7 @@ LLM 호출 오류: {e}
             analysis_summary = self._build_analysis_summary(filename, file_summary, func_summaries)
             
             # 3. 타겟 페이지 찾기
-            target_page = await self._find_target_page(user_id)
+            target_page = await self._find_target_page(user_id, repo)
             if not target_page:
                 api_logger.error(f"타겟 페이지를 찾을 수 없습니다.")
                 return
@@ -1090,7 +1090,8 @@ LLM 호출 오류: {e}
                 target_page["ai_block_id"], 
                 analysis_summary, 
                 commit_sha,
-                user_id
+                user_id,
+                repo
             )
             
             api_logger.info(f"파일 '{filename}' Notion 업데이트 완료")
@@ -1173,15 +1174,15 @@ LLM 호출 오류: {e}
         api_logger.info(f"분석 요약 구성 완료: {len(analysis_parts)}개 파트")
         return result
     
-    async def _find_target_page(self, user_id: str) -> Optional[Dict]:
+    async def _find_target_page(self, user_id: str, repo: str) -> Optional[Dict]:
         """현재 활성 DB에서 가장 가까운 날짜의 학습 페이지 찾기"""
         try:
-            api_logger.info(f"_find_target_page 시작: {user_id}")
+            api_logger.info(f"_find_target_page 시작: {user_id}, repo: {repo}")
             
-            # 1. 현재 활성 DB 찾기 (Redis → Supabase 순)
+            # 1. 현재 활성 DB 찾기 (Redis → Supabase 순) - repo별로 구분
             def _sync_redis_db_get():
                 try:
-                    return self.redis_client.get(f"user:{user_id}:default_db")
+                    return self.redis_client.get(f"user:{user_id}:{repo}:db_id")
                 except Exception as e:
                     api_logger.error(f"Redis DB ID 조회 실패: {e}")
                     return None
@@ -1195,24 +1196,21 @@ LLM 호출 오류: {e}
             if not curr_db_id:
                 api_logger.info("Redis에 DB ID 없음, Supabase에서 조회")
                 try:
-                    # ✅ Step 1: Supabase 호출에 await 추가
+                    # repo_name으로 해당 레포의 learning_db_id 찾기
                     db_result = await self.supabase.table("db_webhooks")\
                         .select("learning_db_id")\
                         .eq("created_by", user_id)\
+                        .eq("repo_name", repo)\
                         .execute()
                     api_logger.info("Supabase DB 조회 완료")
                     
                     if not db_result.data:
-                        # ✅ Step 9: 빈 결과에 대한 명확한 구분
-                        api_logger.warning(f"사용자 {user_id}의 활성 학습 DB가 존재하지 않습니다")
-                        # 기본 DB 생성 로직 또는 알림 로직 추가 가능
+                        api_logger.warning(f"사용자 {user_id}의 레포 {repo}에 대한 활성 학습 DB가 존재하지 않습니다")
                         return None
                     curr_db_id = db_result.data[0]["learning_db_id"]
                 except Exception as e:
-                    # ✅ Step 9: Supabase 호출 자체가 실패한 경우
                     api_logger.error(f"Supabase DB 조회 오류: {e}")
                     api_logger.error(traceback.format_exc())
-                    # 알림 로직 삽입 (Slack, 이메일 등)
                     return None
             
             api_logger.info(f"최종 DB ID: {curr_db_id}")
@@ -1250,9 +1248,7 @@ LLM 호출 오류: {e}
             # 3. 가장 가까운 날짜의 페이지 선택
             closest_page = self._find_closest_page_to_today(pages)
             if not closest_page:
-                # ✅ Step 9: 빈 페이지 결과에 대한 백업 플랜
-                api_logger.warning(f"사용자 {user_id}의 학습 페이지가 존재하지 않습니다")
-                # await self._create_default_learning_page(user_id, curr_db_id) 
+                api_logger.warning(f"사용자 {user_id}의 레포 {repo}에 대한 학습 페이지가 존재하지 않습니다")
                 return None
             
             api_logger.info("_find_target_page 완료")
@@ -1263,7 +1259,7 @@ LLM 호출 오류: {e}
             return None
 
     #[app.utils.notion_utils.py#markdown_to_notion_blocks]{}
-    async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str):
+    async def _append_analysis_to_notion(self, ai_analysis_log_page_id: str, analysis_summary: str, commit_sha: str, user_id: str, repo: str):
         """분석 결과를 제목3 토글 블록으로 노션에 추가 (I/O 오프로드)"""
         # 1. Notion 토큰 조회 (I/O 오프로드)
         token_key = f"user:{user_id}:notion_token"
@@ -1359,7 +1355,8 @@ LLM 호출 오류: {e}
             await notion_service.append_code_analysis_to_page(
                 ai_analysis_log_page_id, 
                 analysis_summary, 
-                commit_sha
+                commit_sha,
+                repo
             )
             api_logger.info(f"Notion에 분석 결과 추가 완료: {commit_sha[:8]}")
         except Exception as e:
