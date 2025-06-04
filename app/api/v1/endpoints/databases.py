@@ -117,10 +117,10 @@ async def get_database(db_id: str, workspace_id: str = Depends(get_user_workspac
 
 # 완료
 @router.post("/", response_model=DatabaseResponse)
-async def create_database(db: DatabaseCreate, workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def create_database(db: DatabaseCreate, user_id: str = Depends(require_user), workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """새로운 DB 생성"""
     try:
-        parent_page_id = await redis_service.get_default_page(workspace_id, redis)
+        parent_page_id = await redis_service.get_default_page(user_id, workspace_id, redis)
         if not parent_page_id:
             raise HTTPException(status_code=404, detail="최상위 페이지의 기본값을 설정해주세요, /notion_setting/set-top-page 에서 설정해주세요.")
         

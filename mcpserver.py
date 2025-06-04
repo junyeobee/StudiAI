@@ -52,7 +52,7 @@ class Group(StrEnum):
     PAGE = "learning/pages"
     DB = "databases"
     WEB = "webhooks"
-    NOTION_SETTINGS = "notion_settings"
+    NOTION_SETTINGS = "notion_setting"
     AUTH = "auth"
     GITHUB_WEBHOOK = "github_webhook"
 

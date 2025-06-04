@@ -34,7 +34,7 @@ async def set_active_workspace(
 ):
     """활성 워크스페이스 설정"""
     try : 
-        result = await switch_active_workspace(update, supabase)
+        result = await switch_active_workspace(user_id, update, supabase)
         await redis_service.set_user_workspace(user_id, update.workspace_id, redis)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -43,19 +43,20 @@ async def set_active_workspace(
 
 @router.get("/top-pages")
 async def get_top_level_pages(
+    user_id: str = Depends(require_user),
     workspace_id: str = Depends(get_notion_workspace),
     notion_service: NotionService = Depends(get_notion_service), 
     redis = Depends(get_redis)
 ):
     """현재 활성 워크스페이스의 최상위 페이지 목록 조회"""
     try: 
-        top_pages = await redis_service.get_workspace_pages(workspace_id, redis)
+        top_pages = await redis_service.get_workspace_pages(user_id, workspace_id, redis)
         if top_pages:
             return {"status": "success", "data": {"pages": top_pages}, "message": "워크스페이스 페이지 목록 조회 성공", "source": "cache"}
         print(top_pages)
         top_pages = await notion_service.get_workspace_top_pages()
         print(top_pages)
-        await redis_service.set_workspace_pages(workspace_id, top_pages, redis)
+        await redis_service.set_workspace_pages(user_id, workspace_id, top_pages, redis)
         print("완료")
         return {"status": "success", "data": {"pages": top_pages}, "message": "워크스페이스 페이지 목록 조회 성공", "source": "api"}
     except Exception as e:
@@ -64,13 +65,14 @@ async def get_top_level_pages(
 @router.get("/set-top-page")
 async def set_top_page(
     page_id:str,
+    user_id: str = Depends(require_user),
     workspace_id: str = Depends(get_notion_workspace),
     redis = Depends(get_redis),
     _: NotionService = Depends(get_notion_service)
 ):
     """default 최상위 페이지 설정"""
     try:
-        top_pages = await redis_service.set_default_page(workspace_id, page_id, redis)
+        top_pages = await redis_service.set_default_page(user_id, workspace_id, page_id, redis)
         if top_pages:
             return {"status": "success", "data": {"pages": top_pages}, "message": "최상위 페이지 목록 설정 성공", "source": "cache"}
     except Exception as e:
@@ -78,13 +80,14 @@ async def set_top_page(
 
 @router.get("/get-top-page")
 async def get_top_page(
+    user_id: str = Depends(require_user),
     workspace_id: str = Depends(get_notion_workspace),
     redis = Depends(get_redis),
     _: NotionService = Depends(get_notion_service)
 ):
     """default 최상위 페이지 조회"""
     try:
-        top_page = await redis_service.get_default_page(workspace_id, redis)
+        top_page = await redis_service.get_default_page(user_id, workspace_id, redis)
         if top_page:
             return {"status": "success", "data": {"page": top_page}, "message": "default 최상위 페이지 조회 성공", "source": "cache"}
     except Exception as e:

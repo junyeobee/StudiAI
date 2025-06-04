@@ -71,22 +71,22 @@ class RedisService:
             self.logger.error(f"사용자 워크스페이스 조회 실패: {str(e)}")
             raise RedisError(f"워크스페이스 조회 실패: {str(e)}")
     
-    async def set_user_workspace(self, user_id: str, workspace: str, redis_client: redis.Redis) -> bool:
+    async def set_user_workspace(self, user_id: str, workspace_id: str, redis_client: redis.Redis) -> bool:
         """
         사용자 워크스페이스 정보를 Redis에 저장
         """
         try: 
-            return redis_client.set(f"user:{user_id}:workspace", workspace)
+            return redis_client.set(f"user:{user_id}:workspace", workspace_id)
         except Exception as e:
             self.logger.error(f"사용자 워크스페이스 저장 실패: {str(e)}")
             raise RedisError(f"워크스페이스 저장 실패: {str(e)}")
     
-    async def get_workspace_pages(self, workspace_id: str, redis_client: redis.Redis) -> list:
+    async def get_workspace_pages(self, user_id: str, workspace_id: str, redis_client: redis.Redis) -> list:
         """
         워크스페이스 페이지 정보를 Redis에서 가져옴
         """
         try: 
-            data = redis_client.get(f"workspace:{workspace_id}:pages")
+            data = redis_client.get(f"user:{user_id}:workspace:{workspace_id}:pages")
             if data:
                 # JSON 문자열을 리스트로 변환
                 return json.loads(data)
@@ -95,34 +95,34 @@ class RedisService:
             self.logger.error(f"워크스페이스 페이지 조회 실패: {str(e)}")
             raise RedisError(f"워크스페이스 페이지 조회 실패: {str(e)}")
     
-    async def set_workspace_pages(self, workspace_id: str, pages: list, redis_client: redis.Redis) -> bool:
+    async def set_workspace_pages(self, user_id: str, workspace_id: str, pages: list, redis_client: redis.Redis) -> bool:
         """
         워크스페이스 페이지 정보를 Redis에 저장
         """
         # 리스트를 JSON 문자열로 변환
         json_data = json.dumps(pages)
         try: 
-            return redis_client.set(f"workspace:{workspace_id}:pages", json_data)
+            return redis_client.set(f"user:{user_id}:workspace:{workspace_id}:pages", json_data)
         except Exception as e:
             self.logger.error(f"워크스페이스 페이지 저장 실패: {str(e)}")
             raise RedisError(f"워크스페이스 페이지 저장 실패: {str(e)}")
     
-    async def set_default_page(self, workspace_id: str, page_id: str, redis_client: redis.Redis) -> bool:
+    async def set_default_page(self, user_id: str, workspace_id: str, page_id: str, redis_client: redis.Redis) -> bool:
         """
         워크스페이스의 기본 페이지 설정
         """
         try: 
-            return redis_client.set(f"workspace:{workspace_id}:default_page", page_id)
+            return redis_client.set(f"user:{user_id}:workspace:{workspace_id}:default_page", page_id)
         except Exception as e:
             self.logger.error(f"워크스페이스 기본 페이지 설정 실패: {str(e)}")
             raise RedisError(f"워크스페이스 기본 페이지 설정 실패: {str(e)}")
 
-    async def get_default_page(self, workspace_id: str, redis_client: redis.Redis) -> str:
+    async def get_default_page(self, user_id: str, workspace_id: str, redis_client: redis.Redis) -> str:
         """
         워크스페이스의 기본 페이지 가져오기
         """
         try: 
-            return redis_client.get(f"workspace:{workspace_id}:default_page")
+            return redis_client.get(f"user:{user_id}:workspace:{workspace_id}:default_page")
         except Exception as e:
             self.logger.error(f"워크스페이스 기본 페이지 조회 실패: {str(e)}")
             raise RedisError(f"워크스페이스 기본 페이지 조회 실패: {str(e)}")

@@ -10,7 +10,6 @@ class WorkspaceStatus(str, Enum):
 # 조회 결과 모델
 class UserWorkspace(BaseModel):
     """사용자 워크스페이스 정보"""
-    user_id: str = Field(..., description="사용자 ID")
     workspace_id: str = Field(..., description="워크스페이스 ID")
     workspace_name: str = Field(..., description="워크스페이스 이름")
     provider: str = Field("notion", description="서비스 제공자")

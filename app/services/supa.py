@@ -551,12 +551,12 @@ async def get_default_workspace(user_id: str, supabase: AsyncClient) -> Optional
         api_logger.error(f"기본 워크스페이스 조회 실패: {str(e)}")
         raise DatabaseError(f"기본 워크스페이스 조회 실패: {str(e)}")
 
-async def switch_active_workspace(WorkspaceStatusUpdate:WorkspaceStatusUpdate, supabase: AsyncClient) -> dict:
+async def switch_active_workspace(user_id: str, update: WorkspaceStatusUpdate, supabase: AsyncClient) -> dict:
     """활성 워크스페이스 변경, 기존 워크스페이스 비활성화 한 후 새로운 워크스페이스 활성화, 이전 workspace의 used(사용중인)db도 비활성화 -> RPC 트랜잭션 사용"""
     try:
         result = await supabase.rpc("activate_workspace_transaction",{
-            "p_user_id": WorkspaceStatusUpdate.user_id, 
-            "p_workspace_id": WorkspaceStatusUpdate.workspace_id
+            "p_user_id": user_id, 
+            "p_workspace_id": update.workspace_id
         }).execute()
 
         return result.data
