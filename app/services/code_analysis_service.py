@@ -1355,8 +1355,7 @@ LLM 호출 오류: {e}
             await notion_service.append_code_analysis_to_page(
                 ai_analysis_log_page_id, 
                 analysis_summary, 
-                commit_sha,
-                repo
+                commit_sha
             )
             api_logger.info(f"Notion에 분석 결과 추가 완료: {commit_sha[:8]}")
         except Exception as e:
