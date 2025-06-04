@@ -26,7 +26,7 @@ class OAuthService:
                 return res.json()
         except Exception as e:
             api_logger.error(f"토큰 교환 실패: {str(e)}")
-            raise NotionAPIError(f"토큰 교환 실패: {str(e)}")
+            raise NotionAPIError(str(e))
         
     async def exchange_github_code(self, code: str) -> dict:
         """GitHub OAuth 코드를 토큰으로 교환"""

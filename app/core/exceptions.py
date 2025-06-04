@@ -1,42 +1,26 @@
 """
 Custom exceptions for the application
 """
-from fastapi import HTTPException, status
 
-class NotionAPIError(HTTPException):
+class NotionAPIError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Notion API Error: {detail}"
-        )
+        super().__init__(f"Notion API Error: {detail}")
 
-class DatabaseError(HTTPException):
+class DatabaseError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database Error: {detail}"
-        )
+        super().__init__(f"Database Error: {detail}")
 
-class WebhookError(HTTPException):
+class WebhookError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Webhook Error: {detail}"
-        )
+        super().__init__(f"Webhook Error: {detail}")
 
-class NotFoundError(HTTPException):
+class NotFoundError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Not Found Error: {detail}"
-        )
+        super().__init__(f"Not Found Error: {detail}")
 
-class ValidationError(HTTPException):
+class ValidationError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Validation Error: {detail}"
-        )
+        super().__init__(f"Validation Error: {detail}")
 
 class LearningError(Exception):
     """학습 관련 예외 클래스"""
@@ -46,21 +30,12 @@ class LearningError(Exception):
 
 class RedisError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Redis Error: {detail}"
-        )
+        super().__init__(f"Redis Error: {detail}")
 
-class GithubAPIError(HTTPException):
+class GithubAPIError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Github API Error: {detail}"
-        )
+        super().__init__(f"Github API Error: {detail}")
 
-class WebhookOperationError(HTTPException):
+class WebhookOperationError(Exception):
     def __init__(self, detail: str):
-        super().__init__(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Webhook Operation Error: {detail}"
-        )
+        super().__init__(f"Webhook Operation Error: {detail}")

@@ -56,7 +56,8 @@ async def create_webhook(
             "status": "active",
             "repo_owner": repo_owner,
             "repo_name": repo_name,
-            "subscribed_events": events
+            "subscribed_events": events,
+            "created_by": user_id
         }
         res = await supabase.table("db_webhooks").upsert(webhook_record).execute()
         record_id = res.data[0]["id"] if res.data else webhook_record["id"]

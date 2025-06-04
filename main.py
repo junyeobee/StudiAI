@@ -1,7 +1,8 @@
 """
 메인 애플리케이션
 """
-from fastapi import FastAPI, Depends
+from fastapi import FastAPI, Depends, Request
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.utils.logger import setup_logging
@@ -9,7 +10,7 @@ from app.api.v1.api import api_router, public_router
 from app.core.events import lifespan
 from app.api.v1.dependencies.auth import require_user
 from fastapi.security import HTTPBearer
-
+from app.utils.logger import api_logger
 # 로깅 설정
 setup_logging()
 
@@ -21,7 +22,8 @@ app = FastAPI(
     description=settings.PROJECT_DESCRIPTION,
     version=settings.VERSION,
     openapi_url=f"{settings.API_V1_STR}/openapi.json",
-    lifespan=lifespan
+    lifespan=lifespan,
+    debug=False
 )
 
 # CORS 설정
@@ -41,6 +43,14 @@ app.include_router(public_router)
 async def root():
     """루트 엔드포인트"""
     return {"message": "Notion 학습 관리 시스템 API"}
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    api_logger.error(f"Request: {request.url}, Unhandled error: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "서버 내부 오류가 발생했습니다."}
+    )
 #───────────────나중에 삭제할 부분(Swagger 인증 설정)
 original_openapi = app.openapi
 

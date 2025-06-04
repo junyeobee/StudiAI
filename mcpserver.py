@@ -323,6 +323,9 @@ async def dispatch(group: Group, action: str, params: dict) -> str:
         return "성공"
 
     except httpx.HTTPStatusError as e:
+        detail = e.response.json().get("detail", "")
+        if detail:
+            return f"HTTP {e.response.status_code}: {detail}"
         code = e.response.status_code
         return f"HTTP {code}: {ERROR_MSG.get(code, e.response.text)}"
     except Exception as e:

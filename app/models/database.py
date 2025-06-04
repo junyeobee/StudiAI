@@ -52,7 +52,7 @@ class DatabaseUpdate(BaseModel):
 
     def dict(self, **kwargs):
         """`None` 값을 제외한 dict 반환"""
-        return {k: v for k, v in super().dump(**kwargs).items() if v is not None}
+        return {k: v for k, v in super().model_dump(**kwargs).items() if v is not None}
 
 
 class DatabaseResponse(BaseModel):

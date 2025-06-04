@@ -42,25 +42,23 @@ redis_service = RedisService()
 async def get_active_database(workspace_id: str = Depends(get_user_workspace), user_id: str = Depends(require_user), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """현재 활성화된 DB 조회"""
     try:
-        # Supabase에서 활성 데이터베이스 정보 조회
-        default_db_id = await redis_service.get_default_db(user_id, redis)
-        default_db_info = None
+        # WorkspaceCacheService로 DB 목록 가져오기
+        learning_data = await workspace_cache_service.get_workspace_learning_data(workspace_id, supabase, redis)
+        all_dbs = learning_data.get("databases", [])
         
-        if not default_db_id:
-            # Redis에 없으면 Supabase에서 조회
-            default_db_info = await get_active_learning_database(supabase, workspace_id)
-            if not default_db_info:
-                return {"status": "none", "message": "활성화된 데이터베이스가 없습니다."}
-            
-            # db_id만 추출해서 Redis에 저장
-            default_db_id = default_db_info.get("db_id")
-            await redis_service.set_default_db(user_id, default_db_id, redis)
-        else:
-            # Redis에서 db_id를 가져왔으면 전체 정보를 다시 조회
-            default_db_info = await get_db_info_by_id(default_db_id, supabase, workspace_id)
-            if not default_db_info:
-                return {"status": "none", "message": "활성화된 데이터베이스가 없습니다."}
-            
+        # used 상태인 DB만 찾기
+        used_dbs = [db for db in all_dbs if db.get("status") == "used"]
+        
+        if not used_dbs:
+            return {"status": "none", "message": "활성화된 데이터베이스가 없습니다."}
+        
+        # 첫 번째 used DB의 정보 사용
+        default_db_info = used_dbs[0]
+        default_db_id = default_db_info.get("db_id")
+        
+        # Redis에 기본 DB ID 저장
+        await redis_service.set_default_db(user_id, default_db_id, redis)
+        
         notion_db = await notion_service.get_active_database(default_db_info)
         if not notion_db:
             return {"status": "error", "message": "Notion API에서 데이터베이스 정보를 가져오는데 실패했습니다."}
@@ -101,7 +99,7 @@ async def list_databases(workspace_id: str = Depends(get_user_workspace), redis 
 
 # 완료
 @router.get("/{db_id}", response_model=DatabaseResponse)
-async def get_database(db_id: str, workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), notion_service: NotionService = Depends(get_notion_service)):
+async def get_database(db_id: str, user_id: str = Depends(require_user), workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), notion_service: NotionService = Depends(get_notion_service)):
     """DB 정보 조회"""
     try:
         #db_key = await get_db_key(db_id, user_id)
@@ -113,7 +111,7 @@ async def get_database(db_id: str, workspace_id: str = Depends(get_user_workspac
         )
     except NotionAPIError as e:
         api_logger.error(f"DB 정보 조회 실패: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
+        raise NotionAPIError(str(e))
 
 # 완료
 @router.post("/", response_model=DatabaseResponse)
@@ -145,14 +143,14 @@ async def create_database(db: DatabaseCreate, user_id: str = Depends(require_use
         )
     except NotionAPIError as e:
         api_logger.error(f"DB 생성 실패: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise NotionAPIError(str(e))
 
 # 완료
 @router.put("/{db_id}", response_model=DatabaseResponse)
 async def update_database(db_id: str, db_update: DatabaseUpdate, workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """DB 정보 업데이트"""
     try:
-        notion_db = await notion_service.update_database(db_id, db_update, workspace_id)
+        notion_db = await notion_service.update_database(db_id, db_update)
         
         update_data = db_update.dict()
         if update_data:
@@ -182,7 +180,7 @@ async def update_database(db_id: str, db_update: DatabaseUpdate, workspace_id: s
         )
     except NotionAPIError as e:
         api_logger.error(f"DB 업데이트 실패: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise NotionAPIError(str(e))
 
 # 완료
 @router.post("/{db_id}/activate")
@@ -204,12 +202,14 @@ async def deactivate_all_databases(workspace_id: str = Depends(get_user_workspac
     """활성화된 DB를 비활성화 상태로 변경합니다."""
     try:
         result = await update_learning_database_status(db_id=None, status="ready", supabase=supabase, workspace_id=workspace_id)
+        await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis)
+        api_logger.info(f"모든 DB 비활성화로 워크스페이스 캐시 무효화: {workspace_id}")
         if not result:
-            raise HTTPException(404, "활성화된 데이터베이스가 없습니다.")
+            raise HTTPException(status_code=404, detail="활성화된 데이터베이스가 없습니다.")
         return {"status":"success", "message":"모든 데이터베이스를 비활성화했습니다."}
     except Exception as e:
         api_logger.error(f"모든 DB 비활성화 실패: {str(e)}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 # 완료
 @router.get("/pages/{page_id}/databases", response_model=List[DatabaseMetadata])

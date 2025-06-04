@@ -513,11 +513,11 @@ async def deactivate_database(db_id: str, supabase: AsyncClient, end_status: boo
         api_logger.error(f"Error deactivating database: {str(e)}")
         raise DatabaseError(f"Error deactivating database: {str(e)}")
 
-async def update_learning_database(db_id: str, update_data: dict, supabase: AsyncClient) -> dict:
+async def update_learning_database(db_id: str, update_data: dict, supabase: AsyncClient, workspace_id: str) -> dict:
     """학습 DB 정보 업데이트"""
     try:
         update_data["updated_at"] = datetime.now().isoformat()
-        res = await supabase.table("learning_databases").update(update_data).eq("db_id", db_id).execute()
+        res = await supabase.table("learning_databases").update(update_data).eq("db_id", db_id).eq("workspace_id", workspace_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
         api_logger.error(f"DB 업데이트 실패: {str(e)}")

@@ -51,11 +51,11 @@ async def list_learning_pages(workspace_id: str = Depends(get_user_workspace), r
                 target_db_id = await get_used_notion_db_id(supabase, workspace_id)
             else:
                 api_logger.error("학습 페이지 목록 조회 실패: db_id 또는 current=true 중 하나는 필수입니다.")
-                raise HTTPException(400, "db_id 또는 current=true 중 하나는 필수입니다.")
+                raise HTTPException(status_code=400, detail="db_id 또는 current=true 중 하나는 필수입니다.")
 
         if not target_db_id:
             api_logger.error("학습 페이지 목록 조회 실패: 활성화된 학습 DB가 없습니다.")
-            raise HTTPException(404, "활성화된 학습 DB가 없습니다.")
+            raise HTTPException(status_code=404, detail="활성화된 학습 DB가 없습니다.")
 
         pages = await notion_service.list_all_pages(target_db_id)
         return {
@@ -68,7 +68,7 @@ async def list_learning_pages(workspace_id: str = Depends(get_user_workspace), r
         raise
     except Exception as e:
         api_logger.error(f"학습 페이지 목록 조회 실패: {str(e)}")
-        raise HTTPException(500, str(e))
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/pages/create")
 async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(get_user_workspace), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
@@ -80,7 +80,7 @@ async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(ge
     valid_db_ids = [db.get("db_id") for db in databases]
     
     if notion_db_id not in valid_db_ids:
-        raise HTTPException(400, "학습 페이지 생성 실패: 유효한 DB가 아닙니다.")
+        raise HTTPException(status_code=400, detail="학습 페이지 생성 실패: 유효한 DB가 아닙니다.")
     
     results = []
 
