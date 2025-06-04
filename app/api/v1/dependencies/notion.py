@@ -18,7 +18,7 @@ async def get_notion_service(
     supabase: AsyncClient = Depends(get_supabase),
     redis: redis.Redis = Depends(get_redis)
 ):
-    # Redis 서비스 초기화
+    """노션 서비스 객체 생성 - 연동이 안 되어 있으면 예외 발생"""
     try:
         # 먼저 Redis에서 토큰 조회 시도
         token = await redis_service.get_token(user_id, "notion", redis)
@@ -28,17 +28,26 @@ async def get_notion_service(
             api_logger.info(f"Redis에 토큰 없음, Supabase에서 조회: {user_id}")
             token = await get_integration_token(user_id=user_id, provider="notion", supabase=supabase)
             
+            # 토큰이 없으면 연동 안됨
+            if not token:
+                raise HTTPException(
+                    status_code=400,
+                    detail="노션 연동을 먼저 진행해주세요."
+                )
+            
             # 조회한 토큰을 Redis에 저장 (1시간 만료)
-            if token:
-                await redis_service.set_token(user_id, token, "notion", redis, expire_seconds=3600)
+            await redis_service.set_token(user_id, token, "notion", redis, expire_seconds=3600)
         else:
             api_logger.info(f"Redis에서 토큰 조회 성공: {user_id}")
             
+    except HTTPException:
+        # HTTPException은 그대로 재발생
+        raise
     except Exception as e:
         api_logger.error(f"Notion 토큰 조회 실패: {str(e)}")
         raise HTTPException(
-            status_code=401,
-            detail="Notion 통합 정보가 없습니다."
+            status_code=500,
+            detail="노션 연동 상태 확인 중 오류가 발생했습니다."
         )
         
     return NotionService(token=token)

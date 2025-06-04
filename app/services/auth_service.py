@@ -202,7 +202,7 @@ async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient
         # DB에서 암호화된 토큰과 IV 조회
         res = await get_integration_by_id(user_id, provider, supabase)   
         if not res:
-            raise Exception("통합 정보 조회 실패")
+            return None
         # 암호화 키와 저장된 IV 가져오기
         encryption_key = base64.b64decode(settings.ENCRYPTION_KEY)
         iv = base64.b64decode(res["token_iv"])

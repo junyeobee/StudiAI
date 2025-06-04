@@ -27,5 +27,4 @@ class UserWorkspaceList(BaseModel):
 # 워크스페이스 상태 변경 요청
 class WorkspaceStatusUpdate(BaseModel):
     """워크스페이스 상태 변경 요청"""
-    user_id: str = Field(..., description="소유주")
     workspace_id: str = Field(..., description="워크스페이스 ID")
