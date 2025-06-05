@@ -12,7 +12,7 @@ class Settings(BaseSettings):
     # 프로젝트 정보
     PROJECT_NAME: str = "Notion Learning API"
     PROJECT_DESCRIPTION: str = "Notion을 활용한 학습 관리 API"
-    VERSION: str = "1.0.0"
+    APP_VERSION: str = "1.0.0"
     
     # API 설정
     API_V1_STR: str = "/api/v1"

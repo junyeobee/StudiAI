@@ -1,5 +1,5 @@
 from supabase._async.client import AsyncClient
-from datetime import datetime
+from datetime import datetime, timezone
 from app.core.config import settings
 from app.utils.logger import api_logger, webhook_logger
 import httpx
@@ -15,8 +15,8 @@ async def insert_learning_database(db_id: str, title: str, parent_page_id: str, 
             "title": title,
             "parent_page_id": parent_page_id,
             "status": "ready",
-            "created_at": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
             "workspace_id": workspace_id
         }
         res = await supabase.table("learning_databases").insert(data).execute()
@@ -93,8 +93,8 @@ async def update_last_used_date(id: int, supabase: AsyncClient, workspace_id: st
     """마지막 사용일 업데이트"""
     try:
         res = await supabase.table("learning_databases").update({
-            "last_used_date": datetime.now().isoformat(),
-            "updated_at": datetime.now().isoformat(),
+            "last_used_date": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat(),
             "workspace_id": workspace_id
         }).eq("id", id).execute()
         return bool(res.data)
@@ -152,7 +152,7 @@ async def update_webhook_info(db_id: str, webhook_id: str, supabase: AsyncClient
         update_data = {
             "webhook_id": webhook_id,
             "webhook_status": status,
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
         if status == "error":
@@ -182,7 +182,15 @@ async def get_webhook_info_by_db_id(db_id: str, supabase: AsyncClient) -> dict:
         api_logger.error(f"웹훅 정보 조회 실패: {str(e)}")
         raise DatabaseError(f"웹훅 정보 조회 실패: {str(e)}")
 
-async def log_webhook_operation(db_id: str, operation_type: str, status: str, supabase: AsyncClient, error_message: str = None, webhook_id: str = None) -> bool:
+async def log_webhook_operation(
+    db_id: str, 
+    operation_type: str, 
+    status: str, 
+    supabase: AsyncClient, 
+    payload: dict = None,
+    error_message: str = None, 
+    webhook_id: str = None
+) -> dict:
     """웹훅 작업 로그 기록"""
     try:
         data = {
@@ -190,11 +198,17 @@ async def log_webhook_operation(db_id: str, operation_type: str, status: str, su
             "operation_type": operation_type,
             "status": status,
             "webhook_id": webhook_id,
+            "payload": payload,
             "error_message": error_message,
-            "updated_at": datetime.now().isoformat()
+            "retry_count": 0,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         res = await supabase.table("webhook_operations").insert(data).execute()
-        return bool(res.data)
+        if res.data:
+            api_logger.info(f"웹훅 작업 로그 기록 성공: {res.data[0]['id']}")
+            return res.data[0]
+        return None
     except Exception as e:
         api_logger.error(f"웹훅 작업 로그 기록 실패: {str(e)}")
         raise DatabaseError(f"웹훅 작업 로그 기록 실패: {str(e)}")
@@ -252,206 +266,59 @@ async def get_ai_block_id_by_page_id(page_id: str, workspace_id: str, supabase: 
         raise DatabaseError(f"AI 블록 ID 조회 실패: {str(e)}")
 
 async def get_failed_webhook_operations(supabase: AsyncClient, limit: int = 10) -> list:
-    """실패한 웹훅 작업 조회"""
+    """실패한 웹훅 작업 조회 (재시도 횟수 3회 미만)"""
     try:
         res = await supabase.table("webhook_operations")\
             .select("*")\
             .eq("status", "failed")\
-            .lte("retry_count", 3)\
+            .lt("retry_count", 3)\
             .order("created_at", desc=True)\
             .limit(limit)\
             .execute()
-        return res.data if res and hasattr(res, 'data') else []
+        return res.data if res.data else []
     except Exception as e:
         api_logger.error(f"실패한 웹훅 작업 조회 실패: {str(e)}")
         raise DatabaseError(f"실패한 웹훅 작업 조회 실패: {str(e)}")
 
-async def update_webhook_operation_status(operation_id: int, status: str, supabase: AsyncClient, error_message: str = None) -> bool:
+async def update_webhook_operation_status(
+    operation_id: str, 
+    status: str, 
+    supabase: AsyncClient, 
+    error_message: str = None
+) -> bool:
     """웹훅 작업 상태 업데이트"""
     try:
         update_data = {
             "status": status,
-            "updated_at": datetime.now().isoformat()
+            "updated_at": datetime.now(timezone.utc).isoformat()
         }
         
         if error_message:
             update_data["error_message"] = error_message
         
         if status == "retry":
-            res = await supabase.table("webhook_operations")\
-                .update({
-                    **update_data,
-                    "retry_count": supabase.raw("retry_count + 1")
-                })\
+            # 재시도 시 retry_count 증가
+            current_res = await supabase.table("webhook_operations")\
+                .select("retry_count")\
                 .eq("id", operation_id)\
                 .execute()
-        else:
-            res = await supabase.table("webhook_operations")\
-                .update(update_data)\
-                .eq("id", operation_id)\
-                .execute()
+            
+            if current_res.data:
+                current_count = current_res.data[0].get("retry_count", 0)
+                update_data["retry_count"] = current_count + 1
         
-        return bool(res.data)
+        res = await supabase.table("webhook_operations")\
+            .update(update_data)\
+            .eq("id", operation_id)\
+            .execute()
+        
+        if res.data:
+            api_logger.info(f"웹훅 작업 상태 업데이트 성공: {operation_id} -> {status}")
+            return True
+        return False
     except Exception as e:
         api_logger.error(f"웹훅 작업 상태 업데이트 실패: {str(e)}")
         raise DatabaseError(f"웹훅 작업 상태 업데이트 실패: {str(e)}")
-
-async def verify_all_webhooks(supabase: AsyncClient) -> dict:
-    """모든 활성 웹훅의 상태를 검증"""
-    try:
-        res = await supabase.table("learning_databases")\
-            .select("*")\
-            .eq("webhook_status", "active")\
-            .execute()
-        
-        active_dbs = res.data if res and hasattr(res, 'data') else []
-        total = len(active_dbs)
-        verified = 0
-        failed = 0
-        errors = []
-        
-        webhook_logger.info(f"Starting verification of {total} active webhooks")
-        
-        async with httpx.AsyncClient() as client:
-            for db in active_dbs:
-                db_id = db.get("db_id")
-                webhook_id = db.get("webhook_id")
-                
-                try:
-                    ping_url = f"https://api.notion.com/v1/webhooks/{webhook_id}"
-                    response = await client.get(
-                        ping_url,
-                        headers={
-                            "Authorization": f"Bearer {settings.NOTION_API_KEY}",
-                            "Notion-Version": settings.NOTION_API_VERSION
-                        },
-                        timeout=10.0
-                    )
-                    
-                    if response.status_code == 200:
-                        verified += 1
-                        webhook_logger.info(f"Webhook verified successfully for DB: {db_id}")
-                    else:
-                        failed += 1
-                        errors.append({
-                            "db_id": db_id,
-                            "error": f"HTTP {response.status_code}: {response.text}"
-                        })
-                        webhook_logger.error(f"Webhook verification failed for DB: {db_id}")
-                        
-                except Exception as e:
-                    failed += 1
-                    errors.append({
-                        "db_id": db_id,
-                        "error": str(e)
-                    })
-                    webhook_logger.error(f"Error verifying webhook for DB {db_id}: {str(e)}")
-        
-        result = {
-            "total": total,
-            "verified": verified,
-            "failed": failed,
-            "errors": errors
-        }
-        
-        webhook_logger.info(f"Webhook verification completed: {result}")
-        return result
-        
-    except Exception as e:
-        webhook_logger.error(f"Error in verify_all_webhooks: {str(e)}")
-        raise DatabaseError(f"Error in verify_all_webhooks: {str(e)}")
-
-async def retry_failed_webhook_operations(supabase: AsyncClient) -> dict:
-    """실패한 웹훅 작업을 재시도"""
-    try:
-        res = await supabase.table("webhook_operations")\
-            .select("*")\
-            .eq("status", "failed")\
-            .lte("retry_count", 3)\
-            .order("created_at", desc=True)\
-            .execute()
-        
-        failed_operations = res.data if res and hasattr(res, 'data') else []
-        total = len(failed_operations)
-        retried = 0
-        failed = 0
-        errors = []
-        
-        webhook_logger.info(f"Starting retry of {total} failed webhook operations")
-        
-        async with httpx.AsyncClient() as client:
-            for operation in failed_operations:
-                operation_id = operation.get("id")
-                db_id = operation.get("db_id")
-                operation_type = operation.get("operation_type")
-                
-                try:
-                    if operation_type == "create":
-                        webhook_url = settings.WEBHOOK_CREATE_URL
-                        response = await client.post(
-                            webhook_url,
-                            json={"db_id": db_id},
-                            timeout=30.0
-                        )
-                    elif operation_type == "delete":
-                        webhook_url = settings.WEBHOOK_DELETE_URL
-                        response = await client.post(
-                            webhook_url,
-                            json={"db_id": db_id},
-                            timeout=30.0
-                        )
-                    else:
-                        raise ValueError(f"Unknown operation type: {operation_type}")
-                    
-                    if response.status_code == 200:
-                        await update_webhook_operation_status(
-                            operation_id,
-                            "success",
-                            None
-                        )
-                        retried += 1
-                        webhook_logger.info(f"Successfully retried operation {operation_id} for DB: {db_id}")
-                    else:
-                        await update_webhook_operation_status(
-                            operation_id,
-                            "failed",
-                            f"HTTP {response.status_code}: {response.text}"
-                        )
-                        failed += 1
-                        errors.append({
-                            "operation_id": operation_id,
-                            "db_id": db_id,
-                            "error": f"HTTP {response.status_code}: {response.text}"
-                        })
-                        webhook_logger.error(f"Failed to retry operation {operation_id} for DB: {db_id}")
-                        
-                except Exception as e:
-                    await update_webhook_operation_status(
-                        operation_id,
-                        "failed",
-                        str(e)
-                    )
-                    failed += 1
-                    errors.append({
-                        "operation_id": operation_id,
-                        "db_id": db_id,
-                        "error": str(e)
-                    })
-                    webhook_logger.error(f"Error retrying operation {operation_id} for DB {db_id}: {str(e)}")
-        
-        result = {
-            "total": total,
-            "retried": retried,
-            "failed": failed,
-            "errors": errors
-        }
-        
-        webhook_logger.info(f"Webhook operation retry completed: {result}")
-        return result
-        
-    except Exception as e:
-        webhook_logger.error(f"Error in retry_failed_webhook_operations: {str(e)}")
-        raise DatabaseError(f"Error in retry_failed_webhook_operations: {str(e)}")
 
 async def get_databases_in_page(page_id: str, supabase: AsyncClient) -> list:
     """특정 Notion 페이지 내의 모든 데이터베이스를 조회"""
@@ -490,24 +357,24 @@ async def get_databases_in_page(page_id: str, supabase: AsyncClient) -> list:
         api_logger.error(f"Error fetching databases: {str(e)}")
         raise DatabaseError(f"Error fetching databases: {str(e)}")
 
-async def activate_database(db_id: str, supabase: AsyncClient) -> bool:
+async def activate_database(db_id: str, supabase: AsyncClient, workspace_id: str) -> bool:
     """데이터베이스를 활성화"""
     try:
-        active_db = await get_active_learning_database(supabase)
+        active_db = await get_active_learning_database(supabase, workspace_id)
         if active_db:
-            await update_learning_database_status(active_db['db_id'], 'ready')
+            await update_learning_database_status(active_db['db_id'], 'ready', supabase, workspace_id)
         
-        await update_learning_database_status(db_id, 'used')
+        await update_learning_database_status(db_id, 'used', supabase, workspace_id)
         return True
     except Exception as e:
         api_logger.error(f"Error activating database: {str(e)}")
         raise DatabaseError(f"Error activating database: {str(e)}")
 
-async def deactivate_database(db_id: str, supabase: AsyncClient, end_status: bool = False) -> bool:
+async def deactivate_database(db_id: str, supabase: AsyncClient, workspace_id: str, end_status: bool = False) -> bool:
     """데이터베이스를 비활성화"""
     try:
         new_status = 'end' if end_status else 'ready'
-        await update_learning_database_status(db_id, new_status)
+        await update_learning_database_status(db_id, new_status, supabase, workspace_id)
         return True
     except Exception as e:
         api_logger.error(f"Error deactivating database: {str(e)}")
@@ -516,7 +383,7 @@ async def deactivate_database(db_id: str, supabase: AsyncClient, end_status: boo
 async def update_learning_database(db_id: str, update_data: dict, supabase: AsyncClient, workspace_id: str) -> dict:
     """학습 DB 정보 업데이트"""
     try:
-        update_data["updated_at"] = datetime.now().isoformat()
+        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
         res = await supabase.table("learning_databases").update(update_data).eq("db_id", db_id).eq("workspace_id", workspace_id).execute()
         return res.data[0] if res.data else None
     except Exception as e:
@@ -603,7 +470,7 @@ async def set_workspaces(workspaces: list[UserWorkspace], supabase: AsyncClient)
         api_logger.error(f"워크스페이스 설정 실패: {str(e)}")
         raise DatabaseError(f"워크스페이스 설정 실패: {str(e)}")
     
-async def get_github_pat(db_id, supabase):
+async def get_github_pat(db_id: str, supabase: AsyncClient):
     try: 
         res = await supabase.table("user_integrations")\
             .select("access_token")\
@@ -657,3 +524,36 @@ async def delete_learning_database_by_system_id(system_id: str, supabase: AsyncC
     except Exception as e:
         api_logger.error(f"학습 데이터베이스 삭제 실패 (시스템 ID: {system_id}): {str(e)}")
         raise DatabaseError(f"학습 데이터베이스 삭제 실패 (시스템 ID: {system_id}): {str(e)}")
+
+async def get_webhook_operations(
+    supabase: AsyncClient, 
+    status: str = None, 
+    limit: int = 50
+) -> list:
+    """웹훅 작업 목록 조회"""
+    try:
+        query = supabase.table("webhook_operations").select("*")
+        
+        if status:
+            query = query.eq("status", status)
+        
+        res = await query.order("created_at", desc=True).limit(limit).execute()
+        return res.data if res.data else []
+    except Exception as e:
+        api_logger.error(f"웹훅 작업 목록 조회 실패: {str(e)}")
+        raise DatabaseError(f"웹훅 작업 목록 조회 실패: {str(e)}")
+
+async def get_webhook_operation_detail(operation_id: str, supabase: AsyncClient) -> dict:
+    """특정 웹훅 작업 상세 조회"""
+    try:
+        res = await supabase.table("webhook_operations")\
+            .select("*")\
+            .eq("id", operation_id)\
+            .execute()
+        
+        if res.data:
+            return res.data[0]
+        return None
+    except Exception as e:
+        api_logger.error(f"웹훅 작업 상세 조회 실패: {str(e)}")
+        raise DatabaseError(f"웹훅 작업 상세 조회 실패: {str(e)}")

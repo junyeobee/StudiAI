@@ -3,6 +3,7 @@ import re
 from abc import ABC, abstractmethod
 from typing import Dict, List, Any, Optional, Type, Tuple
 from app.utils.logger import api_logger
+from app.core.exceptions import ParsingError
 
 # Tree-sitter 관련 imports
 try:
@@ -178,7 +179,7 @@ class TreeSitterBaseExtractor(BaseExtractor):
             return tree.root_node
         except Exception as e:
             api_logger.error(f"tree-sitter 파싱 실패: {e}")
-            return None
+            raise ParsingError(f"코드 파싱 실패: {str(e)}")
     
     def _get_node_text(self, node: Node, content: bytes) -> str:
         """노드의 텍스트 내용 반환"""
@@ -835,7 +836,7 @@ class PythonExtractor(TreeSitterBaseExtractor):
             return Language(tree_sitter_python.language())
         except Exception as e:
             api_logger.error(f"Python language 초기화 실패: {e}")
-            return None
+            raise ParsingError(f"Python 언어 파서 초기화 실패: {str(e)}")
     
     def _get_function_query(self) -> str:
         """Python 함수/클래스 쿼리"""
@@ -908,7 +909,7 @@ class JavaScriptExtractor(TreeSitterBaseExtractor):
             return Language(tree_sitter_javascript.language())
         except Exception as e:
             api_logger.error(f"JavaScript language 초기화 실패: {e}")
-            return None
+            raise ParsingError(f"JavaScript 언어 파서 초기화 실패: {str(e)}")
     
     def _get_function_query(self) -> str:
         """JavaScript/TypeScript 함수 쿼리"""
@@ -982,7 +983,7 @@ class JavaExtractor(TreeSitterBaseExtractor):
             return Language(tree_sitter_java.language())
         except Exception as e:
             api_logger.error(f"Java language 초기화 실패: {e}")
-            return None
+            raise ParsingError(f"Java 언어 파서 초기화 실패: {str(e)}")
     
     def _get_function_query(self) -> str:
         """Java 메서드/클래스 쿼리"""
@@ -1098,7 +1099,7 @@ class CExtractor(TreeSitterBaseExtractor):
             return Language(tree_sitter_cpp.language())
         except Exception as e:
             api_logger.error(f"C/C++ language 초기화 실패: {e}")
-            return None
+            raise ParsingError(f"C/C++ 언어 파서 초기화 실패: {str(e)}")
     
     def _get_function_query(self) -> str:
         """C/C++ 함수 쿼리"""

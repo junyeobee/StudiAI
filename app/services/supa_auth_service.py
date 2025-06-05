@@ -1,6 +1,6 @@
 from app.utils.logger import api_logger
 from supabase._async.client import AsyncClient
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from app.core.exceptions import DatabaseError
 from app.models.auth import UserIntegration, UserIntegrationResponse
@@ -25,7 +25,7 @@ async def create_user_api_key(prefix: str, hashed_key: str, user_id: str, supaba
             "user_id": user_id,
             "api_key_prefix": prefix,
             "auth_token": hashed_key,
-            "created_at": datetime.now().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "active"
         }).execute()
         return res
@@ -50,7 +50,7 @@ async def delete_user_api_key(key_id: str, user_id: str, supabase: AsyncClient):
     """API 키 비활성화"""
     try:
         res = await supabase.table("mcp_users")\
-            .update({"status": "revoked", "updated_at": datetime.now().isoformat()})\
+            .update({"status": "revoked", "updated_at": datetime.now(timezone.utc).isoformat()})\
             .eq("id", key_id)\
             .eq("user_id", user_id)\
             .execute()

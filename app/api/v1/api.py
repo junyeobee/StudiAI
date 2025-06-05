@@ -2,7 +2,7 @@
 API 라우터 통합
 """
 from fastapi import APIRouter
-from app.api.v1.endpoints import databases, webhooks, learning, auth, notion_setting, github_webhook, worker, notion_webhook, health
+from app.api.v1.endpoints import databases, webhooks, learning, auth, notion_setting, github_webhook, worker, notion_webhook, health, admin
 
 api_router = APIRouter()
 public_router = APIRouter()
@@ -38,6 +38,13 @@ api_router.include_router(
     notion_setting.router,
     prefix="/notion_setting",
     tags=["notion_setting"]
+)
+
+# 관리자 관련 엔드포인트 (에러 통계 등)
+api_router.include_router(
+    admin.router,
+    prefix="/admin",
+    tags=["admin"]
 )
 
 public_router.include_router(

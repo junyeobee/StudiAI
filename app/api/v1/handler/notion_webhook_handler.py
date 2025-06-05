@@ -2,12 +2,15 @@
 Notion 웹훅 이벤트 핸들러
 """
 from app.utils.logger import api_logger
+from app.core.exceptions import DatabaseError, WebhookError, RedisError, ValidationError
 from app.services.redis_service import RedisService
 from app.services.workspace_cache_service import workspace_cache_service
 from app.services.supa import (
     delete_learning_page_by_system_id,
     clear_ai_block_id,
-    delete_learning_database_by_system_id
+    delete_learning_database_by_system_id,
+    log_webhook_operation,
+    update_webhook_operation_status
 )
 from supabase._async.client import AsyncClient
 from typing import Dict, Any
@@ -23,6 +26,7 @@ class NotionWebhookHandler:
     
     async def process_webhook_event(self, payload: dict, supabase: AsyncClient, redis_client: redis.Redis):
         """웹훅 이벤트 처리 로직"""
+        operation_log = None
         try:
             workspace_id = payload.get("workspace_id")
             event_type = payload.get("type")
@@ -52,8 +56,38 @@ class NotionWebhookHandler:
                     api_logger.info(f"학습과 무관한 엔티티: {entity_id}, 이벤트 무시")
                     return
             
-            # 학습 관련 엔티티 발견!
+            # 학습 관련 엔티티 발견! 웹훅 작업 로깅 시작
             api_logger.info(f"학습 관련 이벤트 감지: {event_type} - {entity_info['type']} ({entity_id})")
+            
+            # 실제 DB 변경이 일어나는 엔티티 타입만 로깅
+            # db_parent_page는 parent page 콘텐츠 변경으로 우리 DB에 영향 없음
+            entity_type = entity_info.get("type")
+            should_log = entity_type in ["learning_page", "ai_block", "database"]
+            
+            # 웹훅 작업 로깅 (실제 DB 변경 대상만)
+            operation_log = None
+            if should_log:
+                db_id = entity_info.get("db_id")
+                if db_id:
+                    # 이벤트 타입을 허용된 operation_type으로 매핑
+                    operation_type_map = {
+                        "page.deleted": "delete",
+                        "page.content_updated": "verify", 
+                        "database.deleted": "delete",
+                        "database.updated": "verify"
+                    }
+                    operation_type = operation_type_map.get(event_type, "verify")
+                    
+                    operation_log = await log_webhook_operation(
+                        db_id=db_id,
+                        operation_type=operation_type,
+                        status="pending",
+                        supabase=supabase,
+                        payload=payload,  # 원본 Notion 웹훅 데이터 저장
+                        webhook_id=None  # Notion 웹훅은 webhook_id가 별도로 없음
+                    )
+            else:
+                api_logger.info(f"DB 변경 없는 이벤트로 로깅 스킵: {entity_type}")
             
             # 이벤트 타입별 처리
             match event_type:
@@ -72,8 +106,35 @@ class NotionWebhookHandler:
             await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis_client)
             api_logger.info(f"이벤트 처리 완료 및 캐시 무효화: {event_type} - {entity_info['type']}")
             
+            # 성공 시 작업 상태 업데이트
+            if operation_log:
+                await update_webhook_operation_status(
+                    operation_log["id"],
+                    "success",
+                    supabase
+                )
+            
+        except (DatabaseError, RedisError, ValidationError):
+            # 실패 시 작업 상태 업데이트
+            if operation_log:
+                await update_webhook_operation_status(
+                    operation_log["id"],
+                    "failed",
+                    supabase,
+                    error_message=str(e)
+                )
+            raise
         except Exception as e:
-            api_logger.error(f"웹훅 이벤트 처리 실패: {str(e)}")
+            # 예상치 못한 오류 시 작업 상태 업데이트
+            if operation_log:
+                await update_webhook_operation_status(
+                    operation_log["id"],
+                    "failed",
+                    supabase,
+                    error_message=str(e)
+                )
+            api_logger.error(f"웹훅 이벤트 처리 중 예상치 못한 오류: {str(e)}")
+            raise WebhookError(f"웹훅 이벤트 처리 실패: {str(e)}")
     
     async def check_entity_in_database(self, entity_id: str, workspace_id: str, supabase: AsyncClient) -> dict:
         """entity_id가 학습 관련 엔티티인지 DB에서 직접 조회 (Fallback)"""
@@ -116,7 +177,7 @@ class NotionWebhookHandler:
             
         except Exception as e:
             api_logger.error(f"엔티티 DB 조회 실패: {str(e)}")
-            return None
+            raise DatabaseError(f"엔티티 DB 조회 실패: {str(e)}")
     
     async def handle_page_deleted(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient, redis_client: redis.Redis) -> None:
         """페이지 삭제 이벤트 처리"""
@@ -143,8 +204,11 @@ class NotionWebhookHandler:
             
             api_logger.info(f"페이지 삭제 처리 완료: {entity_type}")
             
+        except (DatabaseError, RedisError):
+            raise
         except Exception as e:
-            api_logger.error(f"페이지 삭제 처리 실패: {str(e)}")
+            api_logger.error(f"페이지 삭제 처리 중 예상치 못한 오류: {str(e)}")
+            raise WebhookError(f"페이지 삭제 처리 실패: {str(e)}")
     
     async def handle_page_content_updated(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient, redis_client: redis.Redis) -> None:
         """페이지 콘텐츠 업데이트 이벤트 처리"""
@@ -162,7 +226,8 @@ class NotionWebhookHandler:
             api_logger.info(f"페이지 콘텐츠 업데이트 처리 완료: {entity_type}")
             
         except Exception as e:
-            api_logger.error(f"페이지 콘텐츠 업데이트 처리 실패: {str(e)}")
+            api_logger.error(f"페이지 콘텐츠 업데이트 처리 중 예상치 못한 오류: {str(e)}")
+            raise WebhookError(f"페이지 콘텐츠 업데이트 처리 실패: {str(e)}")
     
     async def handle_database_deleted(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient, redis_client: redis.Redis) -> None:
         """데이터베이스 삭제 이벤트 처리"""
@@ -184,8 +249,11 @@ class NotionWebhookHandler:
             
             api_logger.info(f"데이터베이스 삭제 이벤트 처리 완료: {entity_id}")
             
+        except (DatabaseError, RedisError):
+            raise
         except Exception as e:
-            api_logger.error(f"데이터베이스 삭제 이벤트 처리 실패: {str(e)}")
+            api_logger.error(f"데이터베이스 삭제 이벤트 처리 중 예상치 못한 오류: {str(e)}")
+            raise WebhookError(f"데이터베이스 삭제 이벤트 처리 실패: {str(e)}")
     
     async def handle_database_updated(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient, redis_client: redis.Redis) -> None:
         """데이터베이스 업데이트 이벤트 처리"""
@@ -202,31 +270,40 @@ class NotionWebhookHandler:
             api_logger.info(f"데이터베이스 업데이트 처리 완료: {entity_id}")
             
         except Exception as e:
-            api_logger.error(f"데이터베이스 업데이트 처리 실패: {str(e)}")
+            api_logger.error(f"데이터베이스 업데이트 처리 중 예상치 못한 오류: {str(e)}")
+            raise WebhookError(f"데이터베이스 업데이트 처리 실패: {str(e)}")
     
     async def _handle_learning_page_deleted(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient) -> None:
         """학습 페이지 삭제 처리"""
-        system_id = entity_info.get("system_id")
-        page_id = entity_info.get("page_id")
-        
-        # supa.py 함수 사용
-        success = await delete_learning_page_by_system_id(system_id, supabase)
-        
-        if success:
-            api_logger.info(f"학습 페이지 삭제 완료: {page_id} (시스템 ID: {system_id})")
-        else:
-            api_logger.warning(f"삭제할 학습 페이지를 찾을 수 없음: {page_id} (시스템 ID: {system_id})")
+        try:
+            system_id = entity_info.get("system_id")
+            page_id = entity_info.get("page_id")
+            
+            # supa.py 함수 사용
+            success = await delete_learning_page_by_system_id(system_id, supabase)
+            
+            if success:
+                api_logger.info(f"학습 페이지 삭제 완료: {page_id} (시스템 ID: {system_id})")
+            else:
+                api_logger.warning(f"삭제할 학습 페이지를 찾을 수 없음: {page_id} (시스템 ID: {system_id})")
+        except Exception as e:
+            api_logger.error(f"학습 페이지 삭제 처리 실패: {str(e)}")
+            raise DatabaseError(f"학습 페이지 삭제 처리 실패: {str(e)}")
     
     async def _handle_ai_block_deleted(self, entity_info: Dict[str, Any], payload: Dict[str, Any], supabase: AsyncClient) -> None:
         """AI 블록 삭제 처리"""
-        system_id = entity_info.get("system_id")
-        page_id = entity_info.get("page_id")
-        
-        # supa.py 함수 사용
-        success = await clear_ai_block_id(system_id, supabase)
-        
-        if success:
-            api_logger.info(f"AI 블록 삭제 처리 완료: 페이지 {page_id} (시스템 ID: {system_id})")
+        try:
+            system_id = entity_info.get("system_id")
+            page_id = entity_info.get("page_id")
+            
+            # supa.py 함수 사용
+            success = await clear_ai_block_id(system_id, supabase)
+            
+            if success:
+                api_logger.info(f"AI 블록 삭제 처리 완료: 페이지 {page_id} (시스템 ID: {system_id})")
+        except Exception as e:
+            api_logger.error(f"AI 블록 삭제 처리 실패: {str(e)}")
+            raise DatabaseError(f"AI 블록 삭제 처리 실패: {str(e)}")
     
     async def _remove_entity_from_cache(self, workspace_id: str, entity_id: str, redis_client: redis.Redis) -> None:
         """캐시에서 특정 엔티티만 제거"""
@@ -249,6 +326,7 @@ class NotionWebhookHandler:
                 
         except Exception as e:
             api_logger.error(f"캐시에서 엔티티 제거 실패: {str(e)}")
+            raise RedisError(f"캐시에서 엔티티 제거 실패: {str(e)}")
 
 # 핸들러 인스턴스 생성
 webhook_handler = NotionWebhookHandler() 

@@ -5,6 +5,7 @@ import asyncio
 from typing import Callable, Any, Type
 from functools import wraps
 from app.utils.logger import api_logger
+import httpx
 
 def async_retry(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0, exceptions: tuple[Type[Exception], ...] = (Exception,)) -> Callable:
     """
@@ -27,16 +28,27 @@ def async_retry(max_retries: int = 3, delay: float = 1.0, backoff: float = 2.0, 
                     return await func(*args, **kwargs)
                 except exceptions as e:
                     last_exception = e
+                    
+                    # 예외 정보를 안전하게 추출
+                    error_msg = str(e)
+                    if hasattr(e, 'response') and e.response is not None:
+                        try:
+                            error_msg = f"{e.__class__.__name__}: {e.response.status_code} - {e.response.text}"
+                        except Exception:
+                            error_msg = f"{e.__class__.__name__}: {str(e)}"
+                    else:
+                        error_msg = f"{e.__class__.__name__}: {str(e)}"
+                    
                     if attempt < max_retries - 1:
                         api_logger.warning(
-                            f"Attempt {attempt + 1} failed: {str(e)}. "
+                            f"Attempt {attempt + 1} failed: {error_msg}. "
                             f"Retrying in {current_delay} seconds..."
                         )
                         await asyncio.sleep(current_delay)
                         current_delay *= backoff
                     else:
                         api_logger.error(
-                            f"All {max_retries} attempts failed. Last error: {str(e)}"
+                            f"All {max_retries} attempts failed. Last error: {error_msg}"
                         )
                         raise last_exception
             

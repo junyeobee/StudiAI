@@ -265,9 +265,9 @@ def markdown_to_notion_blocks(content: str) -> list[dict]:
     - ### H3 제목
     - - 또는 * 불릿 리스트
     - 1. 번호 리스트
-    - \n\n → divider 블록
+    - ```코드블록```
+    - > 인용문
     - URL이 포함된 텍스트 (bookmark 블록으로 변환)
-    - 코드 블록, 인용문
     - 일반 텍스트 (paragraph 블록)
     
     Args:
@@ -276,67 +276,62 @@ def markdown_to_notion_blocks(content: str) -> list[dict]:
     Returns:
         Notion API 블록 구조의 리스트
     """
+    lines = content.split('\n')
     blocks = []
+    i = 0
     
-    # \n\n을 구분선으로 처리하기 위해 먼저 분할
-    sections = content.split('\n\n')
-    
-    for section_idx, section in enumerate(sections):
-        if not section.strip():
-            continue
-            
-        # 각 섹션을 라인별로 처리
-        lines = section.split('\n')
+    while i < len(lines):
+        line = lines[i]
         
-        i = 0
-        while i < len(lines):
-            line = lines[i].strip()
-            
-            # 빈 줄 건너뛰기
-            if not line:
-                i += 1
-                continue
-            
-            # 코드 블록 특별 처리 (여러 라인)
-            if line.startswith('```'):
-                language = line[3:].strip() or "plain text"
+        # 코드블록 시작 - 끝까지 찾아서 한 번에 처리
+        if line.startswith('```'):
+            language = line[3:].strip()
+            if not language:
+                language = "plain text"
+            else:
                 # 언어 정규화
                 language = _normalize_language(language)
-                
-                code_lines = []
-                i += 1
-                
-                # 코드 블록 끝까지 읽기
-                while i < len(lines) and not lines[i].strip().startswith('```'):
-                    code_lines.append(lines[i])
-                    i += 1
-                
-                code_content = '\n'.join(code_lines)
-                blocks.append({
-                    "object": "block",
-                    "type": "code",
-                    "code": {
-                        "rich_text": [{"type": "text", "text": {"content": code_content}}],
-                        "language": language
-                    }
-                })
-                i += 1  # ``` 닫는 라인 건너뛰기
-                continue
             
-            # 일반 라인 처리
+            code_lines = []
+            i += 1
+            
+            # 다음 ```까지 모든 내용을 코드로 처리
+            while i < len(lines) and not lines[i].startswith('```'):
+                code_lines.append(lines[i])
+                i += 1
+            
+            # 코드블록 생성
+            blocks.append({
+                "object": "block",
+                "type": "code",
+                "code": {
+                    "rich_text": [{"type": "text", "text": {"content": '\n'.join(code_lines)}}],
+                    "language": language
+                }
+            })
+            # ``` 닫는 라인 건너뛰기
+            i += 1
+            continue
+            
+        # 빈 줄 처리 - 구분선으로 변환
+        elif line.strip() == '':
+            # 연속된 빈 줄은 하나의 구분선으로 처리
+            if blocks and blocks[-1]["type"] != "divider":
+                blocks.append({
+                    "object": "block", 
+                    "type": "divider",
+                    "divider": {}
+                })
+            i += 1
+            continue
+            
+        # 일반 라인 처리
+        else:
             block = _process_markdown_line(line)
             if block is not None:
                 blocks.append(block)
-            
-            i += 1
         
-        # 섹션 간 구분선 추가 (마지막 섹션 제외)
-        if section_idx < len(sections) - 1 and section.strip():
-            blocks.append({
-                "object": "block",
-                "type": "divider",
-                "divider": {}
-            })
+        i += 1
     
     return blocks
 

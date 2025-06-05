@@ -5,6 +5,7 @@ from typing import Dict, Optional, List, Any
 from datetime import datetime, timedelta
 from supabase._async.client import AsyncClient
 from app.utils.logger import api_logger
+from app.core.exceptions import DatabaseError, ValidationError
 from app.services.supa_auth_service import (
     create_user_api_key, 
     get_user_by_key_hash, 
@@ -47,12 +48,14 @@ async def generate_api_key(user_id: str, supabase: AsyncClient) -> str:
         
         if not result or not result.data:
             api_logger.error(f"API 키 생성 후 DB 저장 실패: {user_id}")
-            return None
+            raise DatabaseError(f"API 키 생성 후 DB 저장 실패: {user_id}")
             
         return full_key
+    except DatabaseError:
+        raise
     except Exception as e:
         api_logger.error(f"API 키 생성 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"API 키 생성 실패: {str(e)}")
 
 async def verify_api_key(api_key: str, supabase: AsyncClient) -> str:
     """
@@ -79,7 +82,7 @@ async def verify_api_key(api_key: str, supabase: AsyncClient) -> str:
         return res.data[0]["user_id"]
     except Exception as e:
         api_logger.error(f"API 키 검증 실패: {str(e)}")
-        return None
+        raise DatabaseError(f"API 키 검증 실패: {str(e)}")
 
 async def get_masked_keys(user_id: str, supabase: AsyncClient) -> List[Dict]:
     """
@@ -109,7 +112,7 @@ async def get_masked_keys(user_id: str, supabase: AsyncClient) -> List[Dict]:
         return keys
     except Exception as e:
         api_logger.error(f"마스킹된 API 키 목록 조회 실패: {str(e)}")
-        return []
+        raise DatabaseError(f"마스킹된 API 키 목록 조회 실패: {str(e)}")
 
 async def revoke_api_key(key_id: str, user_id: str, supabase: AsyncClient) -> bool:
     """
@@ -126,7 +129,7 @@ async def revoke_api_key(key_id: str, user_id: str, supabase: AsyncClient) -> bo
         return res and bool(res.data)
     except Exception as e:
         api_logger.error(f"API 키 비활성화 실패: {str(e)}")
-        return False
+        raise DatabaseError(f"API 키 비활성화 실패: {str(e)}")
     
 
 async def get_user_integrations(user_id:str, supabase:AsyncClient) -> List[Dict]:
@@ -137,7 +140,7 @@ async def get_user_integrations(user_id:str, supabase:AsyncClient) -> List[Dict]
         return await get_integrations_by_user_id(user_id, supabase)
     except Exception as e:
         api_logger.error(f"사용자 통합 정보 조회 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"사용자 통합 정보 조회 실패: {str(e)}")
     
 async def encrypt_token(user_id:str,request: UserIntegrationRequest,supabase: AsyncClient) -> UserIntegrationResponse:
     """
@@ -180,10 +183,10 @@ async def encrypt_token(user_id:str,request: UserIntegrationRequest,supabase: As
             
     except ValueError as e:
         api_logger.error(f"통합 정보 입력값 오류: {str(e)}")
-        raise ValueError(f"통합 정보 처리 오류: {str(e)}")
+        raise ValidationError(f"통합 정보 처리 오류: {str(e)}")
     except Exception as e:
         api_logger.error(f"통합 정보 암호화 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"통합 정보 암호화 실패: {str(e)}")
 
 
 async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient) -> str:
@@ -219,7 +222,7 @@ async def get_integration_token(user_id: str,provider: str,supabase: AsyncClient
         
     except Exception as e:
         api_logger.error(f"토큰 복호화 실패: {str(e)}")
-        raise e
+        raise ValidationError(f"토큰 복호화 실패: {str(e)}")
 
 async def verify_integration_token(user_id: str,provider: str,token_to_verify: str,supabase: AsyncClient) -> bool:
     """
@@ -257,7 +260,7 @@ async def verify_integration_token(user_id: str,provider: str,token_to_verify: s
         
     except Exception as e:
         api_logger.error(f"토큰 검증 실패: {str(e)}")
-        return False
+        raise ValidationError(f"토큰 검증 실패: {str(e)}")
 
 def parse_oauth_state(state: str) -> tuple:
     """
@@ -320,9 +323,15 @@ async def process_notion_oauth(user_id: str, code: str, supabase: AsyncClient) -
             "workspace_id": workspace_id,
             "integration_id": result.get("id") if isinstance(result, dict) else None
         }
+    except DatabaseError as e:
+        api_logger.error(f"Notion OAuth DB 오류: {str(e)}")
+        raise
+    except ValidationError as e:
+        api_logger.error(f"Notion OAuth 검증 오류: {str(e)}")
+        raise
     except Exception as e:
         api_logger.error(f"Notion OAuth 처리 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"Notion OAuth 처리 실패: {str(e)}")
     
 async def process_github_oauth(user_id: str, code: str, supabase: AsyncClient) -> dict:
     """GitHub OAuth 처리: 코드 교환, 토큰 저장"""
@@ -364,9 +373,15 @@ async def process_github_oauth(user_id: str, code: str, supabase: AsyncClient) -
             "provider": "github",
             "integration_id": result.get("id") if isinstance(result, dict) else None
         }
+    except DatabaseError as e:
+        api_logger.error(f"GitHub OAuth DB 오류: {str(e)}")
+        raise
+    except ValidationError as e:
+        api_logger.error(f"GitHub OAuth 검증 오류: {str(e)}")
+        raise
     except Exception as e:
         api_logger.error(f"GitHub OAuth 처리 실패: {str(e)}")
-        raise e
+        raise DatabaseError(f"GitHub OAuth 처리 실패: {str(e)}")
 
 
 def _create_token_request(user_id: str, provider: str, token_data: dict, integration_data: dict = None) -> UserIntegrationRequest:

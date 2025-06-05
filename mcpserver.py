@@ -82,10 +82,9 @@ ACTION_MAP: dict[Group, dict[str, Route]] = {
         "update": {"method":"PATCH", "path":lambda p:f"/{p['db_id']}", "needs_json":True},
     },
     Group.WEB: {
-        "start": {"method":"POST", "path":_const("/monitor/all"), "needs_json":False},
-        "stop": {"method":"POST", "path":_const("/unmonitor/all"), "needs_json":False},
-        "verify": {"method":"POST", "path":_const("/verify"), "needs_json":False},
-        "retry": {"method":"POST", "path":_const("/retry"), "needs_json":False},
+        "failed": {"method":"GET", "path":_const("/operations/failed"), "needs_json":False},
+        "list": {"method":"GET", "path":_const("/operations"), "needs_json":False},
+        "detail": {"method":"GET", "path":lambda p:f"/operations/{p['operation_id']}", "needs_json":False},
     },
     Group.NOTION_SETTINGS: {
         "workspaces": {"method":"GET", "path":_const("/workspaces"), "needs_json":False},
@@ -197,6 +196,19 @@ EXAMPLE_MAP: dict[str, str] = {
     "page_tool.commit_sha": (
         "params.page_id, params.commit_sha 파라미터 넣을 시 특정 페이지의 특정 커밋 내용 조회"
     ),
+
+    # 웹훅 작업 관련
+    "webhook_tool.failed": (
+        "params.limit (선택, 기본값: 10): 실패한 웹훅 작업 목록 조회"
+    ),
+    
+    "webhook_tool.list": (
+        "params.status (선택), params.limit (선택, 기본값: 50): 웹훅 작업 목록 조회"
+    ),
+    
+    "webhook_tool.detail": (
+        "params.operation_id 필수: 특정 웹훅 작업 상세 조회"
+    ),
 }
 USER_GUIDE : dict[str, str] = {
     "default" : (
@@ -239,12 +251,11 @@ USER_GUIDE : dict[str, str] = {
         "[학습 페이지 커밋 내용 조회]: 페이지의 특정 커밋 내용을 조회합니다."
     ),
     "Webhook" : (
-        "웹훅을 관리합니다.\n"
-        "지금 활성화된 워크스페이스에서 다음 작업을 진행할 수 있습니다:\n"
-        "[웹훅 시작]: 웹훅을 시작합니다.\n"
-        "[웹훅 중지]: 웹훅을 중지합니다.\n"
-        "[웹훅 확인]: 웹훅 상태를 확인합니다.\n"
-        "[웹훅 재시도]: 웹훅을 재시도합니다."
+        "웹훅 작업 이력을 조회합니다.\n"
+        "Notion 웹훅으로 처리된 작업들의 상태를 확인할 수 있습니다:\n"
+        "[실패한 작업 조회]: 재시도가 필요한 실패한 웹훅 작업 목록을 조회합니다.\n"
+        "[작업 목록 조회]: 모든 웹훅 작업 목록을 조회합니다. 상태별 필터링 가능합니다.\n"
+        "[작업 상세 조회]: 특정 웹훅 작업의 상세 내용을 조회합니다."
     ),
     "GitHub_Webhook" : (
         "GitHub 웹훅을 관리합니다.\n"
@@ -253,15 +264,6 @@ USER_GUIDE : dict[str, str] = {
         "[저장소 목록 조회]: 사용 가능한 GitHub 저장소 목록을 조회합니다.\n"
         "웹훅 생성 시 repo_url(저장소 URL)과 learning_db_id(연결할 학습 DB ID)가 필요합니다."
     ),
-}
-ERROR_MSG = {
-    400: "400 Bad Request",
-    401: "401 Unauthorized",
-    403: "403 Forbidden",
-    404: "404 Not Found, ID 확인 필요",
-    422: "422 Unprocessable: payload 형식을 확인",
-    429: "429 Too Many Requests",
-    500: "500 Internal Server Error",
 }
 
 #Http Client 싱글톤
@@ -281,7 +283,13 @@ def _get_payload(group: Group, action: str, params: dict) -> dict | None:
 
     raw_payload = params.get("payload")
     if raw_payload is None:
-        raise ValueError(f"{action} helper툴을 호출해서 파라미터 형식을 확인")
+        tool_name = f"{group.value}_tool.{action}"
+        error_msg = (
+            f"❌ {tool_name} 액션은 params.payload 필수 \n\n"
+            f"📖 올바른 형식 확인절차: helper('{tool_name}') 호출\n"
+            f"💡 예시:\n{EXAMPLE_MAP.get(tool_name, '해당 액션 예시.')}"
+        )
+        raise ValueError(error_msg)
 
     model_cls = PAYLOAD_MODEL.get((group, action))
     if model_cls is None:
@@ -290,7 +298,19 @@ def _get_payload(group: Group, action: str, params: dict) -> dict | None:
     try:
         return model_cls.model_validate(raw_payload).model_dump(mode="json")
     except ValidationError as ve:
-        raise ValueError(f"payload 검증 실패: {ve}") from ve
+        tool_name = f"{group.value}_tool.{action}"
+        error_details = []
+        for error in ve.errors():
+            field = '.'.join(str(x) for x in error['loc'])
+            error_details.append(f"  • {field}: {error['msg']}")
+        
+        error_msg = (
+            f"❌ payload 검증 실패\n\n"
+            f"🔍 오류 내용:\n" + '\n'.join(error_details) + "\n\n"
+            f"📖 올바른 형식 확인절차: helper('{tool_name}') 호출\n"
+            f"💡 예시:\n{EXAMPLE_MAP.get(tool_name, '해당 액션 예시.')}"
+        )
+        raise ValueError(error_msg) from ve
 
 # 툴 디스패치
 async def dispatch(group: Group, action: str, params: dict) -> str:
@@ -323,11 +343,12 @@ async def dispatch(group: Group, action: str, params: dict) -> str:
         return "성공"
 
     except httpx.HTTPStatusError as e:
-        detail = e.response.json().get("detail", "")
-        if detail:
-            return f"HTTP {e.response.status_code}: {detail}"
-        code = e.response.status_code
-        return f"HTTP {code}: {ERROR_MSG.get(code, e.response.text)}"
+        try:
+            error_response = e.response.json()
+            detail = error_response.get("detail", f"HTTP {e.response.status_code}")
+            return f"오류: {detail}"
+        except:
+            return f"HTTP {e.response.status_code} 오류 발생"
     except Exception as e:
         return f"{group.value} {action} 실패: {e}"
 
@@ -340,7 +361,7 @@ async def page_tool(action: str, params: dict[str, Any]) -> str:
 async def database_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.DB, action, params)
 
-@mcp.tool(description="웹훅/모니터링 액션 처리 (start|stop|verify|retry)") 
+@mcp.tool(description="웹훅 작업 이력 관리 (failed|list|detail)") 
 async def webhook_tool(action: str, params: dict[str, Any]) -> str:
     return await dispatch(Group.WEB, action, params)
 

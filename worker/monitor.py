@@ -4,6 +4,11 @@ from rq.registry import StartedJobRegistry, FinishedJobRegistry, FailedJobRegist
 from rq.worker import WorkerStatus
 from typing import Dict, Any
 
+# 커스텀 예외 정의
+class QueueError(Exception):
+    """Queue 관련 오류"""
+    pass
+
 def get_worker_state_name(worker) -> str:
     """워커 상태를 안전하게 문자열로 변환"""
     try:
@@ -104,11 +109,10 @@ def get_queue_stats(redis_client: redis.Redis) -> Dict[str, Any]:
         
         return stats
         
+    except redis.RedisError as e:
+        raise QueueError(f"Redis 연결 오류로 큐 통계 조회 실패: {str(e)}")
     except Exception as e:
-        return {
-            '오류': f"모니터링 실패: {str(e)}",
-            '큐_상태': 'error'
-        }
+        raise QueueError(f"큐 모니터링 실패: {str(e)}")
 
 def get_detailed_queue_info(redis_client: redis.Redis) -> Dict[str, Any]:
     """상세한 큐 정보 조회"""
@@ -128,8 +132,10 @@ def get_detailed_queue_info(redis_client: redis.Redis) -> Dict[str, Any]:
         
         return recent_jobs
         
+    except redis.RedisError as e:
+        raise QueueError(f"Redis 연결 오류로 큐 상세 정보 조회 실패: {str(e)}")
     except Exception as e:
-        return {'오류': f"상세 정보 조회 실패: {str(e)}"}
+        raise QueueError(f"큐 상세 정보 조회 실패: {str(e)}")
 
 def get_worker_health(redis_client: redis.Redis) -> Dict[str, Any]:
     """워커 헬스 체크 - 안전한 상태 확인"""
@@ -148,32 +154,34 @@ def get_worker_health(redis_client: redis.Redis) -> Dict[str, Any]:
             'total_workers': len(workers),
             'status': 'healthy' if len(workers) > 0 else 'no_workers'
         }
+    except redis.RedisError as e:
+        raise QueueError(f"Redis 연결 오류로 워커 헬스 체크 실패: {str(e)}")
     except Exception as e:
-        return {
-            'status': 'error',
-            'error': str(e)
-        }
+        raise QueueError(f"워커 헬스 체크 실패: {str(e)}")
 
 def print_queue_status(redis_client: redis.Redis):
     """큐 상태를 콘솔에 출력"""
-    stats = get_queue_stats(redis_client)
-    
-    print("=" * 50)
-    print("🔍 RQ 큐 모니터링 상태")
-    print("=" * 50)
-    
-    for key, value in stats.items():
-        if key == '워커_상세정보':
-            print(f"\n👷 {key}:")
-            if isinstance(value, list) and value:
-                for i, worker in enumerate(value, 1):
-                    print(f"  {i}. {worker}")
+    try:
+        stats = get_queue_stats(redis_client)
+        
+        print("=" * 50)
+        print("🔍 RQ 큐 모니터링 상태")
+        print("=" * 50)
+        
+        for key, value in stats.items():
+            if key == '워커_상세정보':
+                print(f"\n👷 {key}:")
+                if isinstance(value, list) and value:
+                    for i, worker in enumerate(value, 1):
+                        print(f"  {i}. {worker}")
+                else:
+                    print("  활성 워커 없음")
             else:
-                print("  활성 워커 없음")
-        else:
-            print(f"📊 {key}: {value}")
-    
-    print("=" * 50)
+                print(f"📊 {key}: {value}")
+        
+        print("=" * 50)
+    except QueueError as e:
+        print(f"❌ 큐 상태 조회 실패: {str(e)}")
 
 if __name__ == '__main__':
     # 테스트용 Redis 연결
@@ -184,9 +192,12 @@ if __name__ == '__main__':
         password=os.getenv('REDIS_PASSWORD', None)
     )
     
-    print_queue_status(redis_conn)
-    
-    print("\n📋 상세 작업 정보:")
-    detailed_info = get_detailed_queue_info(redis_conn)
-    for key, value in detailed_info.items():
-        print(f"  {key}: {value}")
+    try:
+        print_queue_status(redis_conn)
+        
+        print("\n📋 상세 작업 정보:")
+        detailed_info = get_detailed_queue_info(redis_conn)
+        for key, value in detailed_info.items():
+            print(f"  {key}: {value}")
+    except QueueError as e:
+        print(f"❌ 모니터링 실패: {str(e)}")

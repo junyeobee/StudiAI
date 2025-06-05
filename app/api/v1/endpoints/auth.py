@@ -79,7 +79,7 @@ async def delete_api_key(
     
     return MessageResponse(
         message="API 키가 성공적으로 비활성화되었습니다",
-        success=True
+        success=success
     ) 
 
 @router.post("/integrations", response_model=UserIntegrationResponse)

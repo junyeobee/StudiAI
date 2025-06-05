@@ -20,9 +20,10 @@ from app.models.learning import (
     LearningPagesRequest
 )
 from app.utils.retry import async_retry
+import hashlib
 
 class NotionService:
-    def __init__(self, token: str, timeout_seconds: int = 60):
+    def __init__(self, token: str, timeout_seconds: int = 180):
         self.api_key = token
         self.api_version = settings.NOTION_API_VERSION
         self.base_url = "https://api.notion.com/v1"
@@ -31,31 +32,42 @@ class NotionService:
             "Notion-Version": self.api_version,
             "Content-Type": "application/json"
         }
-        self.timeout = httpx.Timeout(timeout_seconds, connect=10.0)
+        self.timeout = httpx.Timeout(timeout_seconds, connect=20.0)
 
     # 노션 API 요청 공통 메서드
-    @async_retry(max_retries=3, delay=1.0, backoff=2.0)
+    @async_retry(max_retries=2, delay=2.0, backoff=2.0)
     async def _make_request(self, method: str, endpoint: str, **kwargs) -> Dict[str, Any]:
         """Notion API 요청을 보내는 공통 메서드"""
         url = f"{self.base_url}/{endpoint}"
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.request(method, url, headers=self.headers, **kwargs)
                 response.raise_for_status()
                 return response.json()
         except httpx.HTTPError as e:
             # 요청 바디와 Notion 응답을 함께 로깅합니다.
             body = kwargs.get("json") or kwargs.get("params")
-            status = e.response.status_code if e.response is not None else None
-            text = e.response.text if e.response is not None else str(e)
-            notion_logger.error(
-                f"⛔ Notion API 오류:\n"
-                f"   ▶ Method: {method}\n"
-                f"   ▶ URL   : {url}\n"
-                f"   ▶ Body  : {body}\n"
-                f"   ▶ Status: {status}\n"
-                f"   ▶ Error : {text}"
-            )
+            status = e.response.status_code if hasattr(e, 'response') and e.response is not None else None
+            text = e.response.text if hasattr(e, 'response') and e.response is not None else str(e)
+            
+            # ReadTimeout의 경우 특별한 로깅
+            if isinstance(e, httpx.ReadTimeout):
+                notion_logger.warning(
+                    f"⏰ Notion API ReadTimeout (재시도 진행):\n"
+                    f"   ▶ Method: {method}\n"
+                    f"   ▶ URL   : {url}\n"
+                    f"   ▶ Body  : {body}\n"
+                    f"   ▶ Error : 블록 처리로 인한 타임아웃 - 재시도 중"
+                )
+            else:
+                notion_logger.error(
+                    f"⛔ Notion API 오류:\n"
+                    f"   ▶ Method: {method}\n"
+                    f"   ▶ URL   : {url}\n"
+                    f"   ▶ Body  : {body}\n"
+                    f"   ▶ Status: {status}\n"
+                    f"   ▶ Error : {text}"
+                )
             raise NotionAPIError(f"API 요청 실패: {text}")
         
     
@@ -229,24 +241,34 @@ class NotionService:
             raise NotionAPIError(f"데이터베이스 업데이트 실패: {str(e)}")
         
     # 학습 페이지 생성
-    async def create_learning_page(self, database_id: str, plan: LearningPageCreate) -> tuple[str, str]:
+    async def create_learning_page(self, database_id: str, plan: LearningPageCreate, idempotency_key: str = None) -> tuple[str, str]:
         """
         - 데이터 베이스에 페이지(row)를 생성하고 학습 목표, 학습 내용, AI 분석 결과 템플릿 추가
         - (page_id, ai_analysis_log_page_id) 튜플을 반환
+        - idempotency_key: 멱등성 키 (중복 방지용)
         """
-        # 1) 페이지 속성
+        # 멱등성 키가 없으면 생성
+        if not idempotency_key:
+            content_hash = hashlib.md5(f"{database_id}_{plan.title}_{plan.date.isoformat()}_{plan.goal_intro}".encode()).hexdigest()[:8]
+            idempotency_key = f"page_{content_hash}"
+        
+        # 1) 페이지 속성 (멱등성 키를 제목에 포함하여 중복 확인 가능하게)
         props = {
             "학습 제목": {"title": [{"text": {"content": plan.title}}]},
             "날짜":     {"date":  {"start": plan.date.isoformat()}},
             "진행 상태": {"select": {"name": plan.status.value}},
             "복습 여부": {"checkbox": plan.revisit}
         }
+        
+        notion_logger.info(f"페이지 생성 시작 - 멱등성 키: {idempotency_key}, 제목: {plan.title}")
+        
         page_resp = await self._make_request(
             "POST",
             "pages",
             json={"parent": {"database_id": database_id}, "properties": props}
         )
         page_id = page_resp["id"]
+        notion_logger.info(f"페이지 생성 성공 - 페이지 ID: {page_id}")
 
         # 2) 본문 블록 구성
         blocks: List[dict] = [
@@ -310,7 +332,7 @@ class NotionService:
         ])
 
         # 3) 모든 블록들을 50개씩 나누어서 페이지에 추가
-        await self._patch_children_in_chunks(page_id, blocks, 50, 0.2)
+        await self._patch_children_in_chunks(page_id, blocks, 50, 1.0)
 
         # 4) 📄 종합 분석 로그 페이지를 별도로 생성
         ai_analysis_page_props = {
@@ -330,7 +352,7 @@ class NotionService:
 
         # 5) 마크다운을 노션 블록으로 변환하여 메인 페이지에 50개씩 추가
         summary_blocks = markdown_to_notion_blocks(plan.summary)
-        await self._patch_children_in_chunks(page_id, summary_blocks, 50, 0.2)
+        await self._patch_children_in_chunks(page_id, summary_blocks, 50, 1.0)
 
         # 6) 종합 분석 로그 페이지에는 기본 안내 내용만 추가
         log_blocks = [
@@ -353,7 +375,7 @@ class NotionService:
             }
         ]
         
-        await self._patch_children_in_chunks(ai_analysis_log_page_id, log_blocks, 50, 0.2)
+        await self._patch_children_in_chunks(ai_analysis_log_page_id, log_blocks, 50, 1.0)
 
         return page_id, ai_analysis_log_page_id
     
@@ -471,7 +493,7 @@ class NotionService:
                 })
             
             if new_todos:
-                await self._patch_children_in_chunks(page_id, new_todos, 50, 0.2)
+                await self._patch_children_in_chunks(page_id, new_todos, 50, 1.0)
 
     # 요약 페이지 업데이트
     async def update_ai_summary_by_page(self, page_id: str, summary: str) -> None:
@@ -479,7 +501,7 @@ class NotionService:
         MarkDown 형식의 요약 내용을 Notion 블록으로 변환하여 학습 페이지에 추가 (항상 페이지 마지막 블록에 쌓임)
         """
         summary_blocks = markdown_to_notion_blocks(summary)
-        await self._patch_children_in_chunks(page_id, summary_blocks, 50, 0.2)
+        await self._patch_children_in_chunks(page_id, summary_blocks, 50, 1.0)
 
     # 학습 페이지 종합 업데이트
     async def update_learning_page_comprehensive(self, page_id: str, props: Optional[Dict[str, Any]] = None, goal_intro: Optional[str] = None, goals: Optional[List[str]] = None, summary: Optional[str] = None) -> None:
@@ -536,7 +558,7 @@ class NotionService:
         toggle_block_id = toggle_response["results"][0]["id"]
         
         # 5. content_blocks를 50개씩 나누어서 토글 블록에 추가
-        await self._patch_children_in_chunks(toggle_block_id, content_blocks, 50, 0.2)
+        await self._patch_children_in_chunks(toggle_block_id, content_blocks, 50, 1.0)
 
         notion_logger.info(f"코드 분석 결과 추가 완료: {commit_sha[:8]} (총 {len(content_blocks)}개 블록)")
 
