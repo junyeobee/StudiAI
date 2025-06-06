@@ -68,6 +68,16 @@ jobs:
         pip install pytest-cov
         python -m pytest tests/test_api/ --cov=app --cov-report=xml --cov-report=term
 
+    - name: 🐳 Docker 이미지 빌드 테스트
+      run: |
+        # Dockerfile이 있으면 빌드 테스트만 실행
+        if [ -f Dockerfile ]; then
+          docker build -t notion-lms-test:latest .
+          echo "✅ Docker 이미지 빌드 성공"
+        else
+          echo "⚠️ Dockerfile 없음 - 빌드 스킵"
+        fi
+
 # 🚀 배포 관련 섹션 (나중에 필요시 활성화)
 # 
 # jobs:
