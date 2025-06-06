@@ -58,7 +58,7 @@ class TestAdminErrorStatistics:
         call_args = mock_service.call_args
         assert call_args.kwargs["version_tag"] == "v1.0.0"
         assert call_args.kwargs["limit"] == 50
-
+    
     @pytest.mark.skip(reason="인증 테스트는 현재 스킵")
     def test_get_error_statistics_unauthorized(self, client):
         """인증 없는 요청 테스트 - 스킵"""
@@ -198,7 +198,7 @@ class TestAdminIntegration:
     async def test_admin_workflow(self, authenticated_client, mock_supabase):
         """관리자 워크플로우 통합 테스트"""
         client, headers = authenticated_client
-
+        
         # 1. 헬스체크는 스킵 (Supabase mock 복잡함)
         # health_response = client.get("/admin/health/error-logging", headers=headers)
         # assert health_response.status_code == 200

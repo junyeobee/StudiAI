@@ -1,24 +1,7 @@
 version: '3.8'
 
 services:
-  # Notion LMS with ngrok (프로덕션용)
-  app:
-    build: .
-    ports:
-      - "8000:8000"
-    environment:
-      - ENVIRONMENT=development
-      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
-    volumes:
-      - ./.env:/app/.env:ro
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-  # FastAPI 애플리케이션
+  # FastAPI 애플리케이션 (메인 서비스)
   fastapi:
     build: 
       context: .
@@ -59,7 +42,7 @@ services:
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "9091", "-a", "${REDIS_PASSWORD:-default_password}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
