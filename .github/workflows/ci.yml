@@ -68,14 +68,48 @@ jobs:
         pip install pytest-cov
         python -m pytest tests/test_api/ --cov=app --cov-report=xml --cov-report=term
 
-    - name: 🐳 Docker 이미지 빌드 테스트
+    - name: 🐳 Docker Compose 전체 스택 테스트
+      env:
+        REDIS_PASSWORD: test_password
+        SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+        SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
+        OPENAI_API_KEY: test_key
+        ANTHROPIC_API_KEY: test_key
       run: |
-        # Dockerfile이 있으면 빌드 테스트만 실행
-        if [ -f Dockerfile ]; then
-          docker build -t notion-lms-test:latest .
-          echo "✅ Docker 이미지 빌드 성공"
+        # docker-compose로 전체 스택 빌드 및 실행 테스트
+        if [ -f docker-compose.yml ]; then
+          echo "🚀 Docker Compose 스택 시작..."
+          
+          # 백그라운드에서 서비스 시작
+          docker-compose up -d --build
+          
+          # 서비스들이 준비될 때까지 대기
+          echo "⏳ 서비스 준비 대기 중..."
+          sleep 30
+          
+          # FastAPI 헬스체크
+          if curl -f http://localhost:8000/health; then
+            echo "✅ FastAPI 서비스 정상"
+          else
+            echo "❌ FastAPI 서비스 실패"
+            docker-compose logs fastapi
+            exit 1
+          fi
+          
+          # Redis 연결 테스트
+          if docker-compose exec -T redis redis-cli -p 9091 -a test_password ping; then
+            echo "✅ Redis 서비스 정상"
+          else
+            echo "❌ Redis 서비스 실패" 
+            docker-compose logs redis
+            exit 1
+          fi
+          
+          # 서비스 정리
+          docker-compose down -v
+          echo "✅ Docker Compose 스택 테스트 완료"
         else
-          echo "⚠️ Dockerfile 없음 - 빌드 스킵"
+          echo "⚠️ docker-compose.yml 없음 - 스킵"
         fi
 
 # 🚀 배포 관련 섹션 (나중에 필요시 활성화)

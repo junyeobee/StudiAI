@@ -1,0 +1,101 @@
+version: '3.8'
+
+services:
+  # Notion LMS with ngrok (프로덕션용)
+  app:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    volumes:
+      - ./.env:/app/.env:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+  # FastAPI 애플리케이션
+  fastapi:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:9091
+      - REDIS_HOST=redis
+      - REDIS_PORT=9091
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-default_password}
+      - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-key}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-your-anthropic-key}
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+      - /app/.venv  # 가상환경 제외
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis (RQ 작업 큐용)
+  redis:
+    image: public.ecr.aws/docker/library/redis:7-alpine
+    ports:
+      - "9091:9091"  # 외부:내부 모두 9091로 통일
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-default_password}
+    command: redis-server --port 9091 --requirepass ${REDIS_PASSWORD:-default_password} --appendonly yes
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # RQ Worker
+  rq-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - ENVIRONMENT=development
+      - REDIS_URL=redis://redis:9091
+      - REDIS_HOST=redis
+      - REDIS_PORT=9091
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-default_password}
+      - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-key}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-your-anthropic-key}
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+      - /app/.venv  # 가상환경 제외
+    command: python start_worker.py --mode optimized --scaling true
+    restart: unless-stopped
+
+  # RQ Dashboard (RQ 작업 모니터링) - 임시 비활성화 (네트워크 문제)
+  # rq-dashboard:
+  #   image: eoranged/rq-dashboard:latest
+  #   ports:
+  #     - "9181:9181"
+  #   environment:
+  #     - RQ_DASHBOARD_REDIS_URL=redis://redis:6379
+  #   depends_on:
+  #     - redis
+
+volumes:
+  redis_data: 
