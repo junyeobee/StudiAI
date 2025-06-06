@@ -4,8 +4,8 @@ import secrets
 from app.utils.logger import api_logger
 from app.core.exceptions import GithubAPIError
 from app.utils.retry import async_retry
-
-
+from app.api.v1.endpoints.auth import require_user
+from fastapi import Depends
 class GitHubWebhookService:
     """GitHub 웹훅 관리 서비스"""
     def __init__(self, token: str):

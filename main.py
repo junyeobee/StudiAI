@@ -12,6 +12,7 @@ from app.api.v1.dependencies.auth import require_user
 from fastapi.security import HTTPBearer
 from app.utils.logger import api_logger
 from app.core.exception_handlers import register_exception_handlers
+from app.middleware.auth_middleware import AuthMiddleware
 
 # 로깅 설정
 setup_logging()
@@ -36,6 +37,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# 인증 미들웨어 등록 (lifespan 이벤트에서 supabase 클라이언트 설정됨)
+@app.middleware("http")
+async def auth_middleware_wrapper(request, call_next):
+    """인증 미들웨어 래퍼 - app.state.supabase 사용"""
+    # AuthMiddleware 인스턴스 생성 시 supabase 클라이언트 전달
+    middleware = AuthMiddleware(
+        app=app, 
+        supabase_client=getattr(app.state, 'supabase', None)
+    )
+    return await middleware.dispatch(request, call_next)
 
 # 전역 예외 핸들러 등록
 register_exception_handlers(app)

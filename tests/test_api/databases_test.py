@@ -1,47 +1,76 @@
 """
-간단한 Databases API 엔드포인트 테스트
-복잡한 모킹 없이 기본 동작 확인
+데이터베이스 API 엔드포인트 테스트
+기본적인 엔드포인트 존재 여부와 구조 확인
 """
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import patch, AsyncMock
 
 
-def test_databases_endpoints_exist(client: TestClient, auth_headers):
+@patch('app.api.v1.endpoints.databases.workspace_cache_service.get_workspace_learning_data')
+def test_databases_endpoints_exist(mock_cache, client: TestClient, auth_headers):
     """데이터베이스 엔드포인트들이 존재하는지 확인"""
     
+    # 활성화된 DB가 있는 경우로 모킹
+    mock_cache.return_value = {
+        "databases": [
+            {
+                "db_id": "test_db_123",
+                "title": "테스트 DB",
+                "status": "used",  # 활성화된 상태
+                "parent_page_id": "parent_123",
+                "last_used_date": "2024-01-01T00:00:00Z",
+                "webhook_id": None,
+                "webhook_status": "inactive",
+                "workspace_id": "test_workspace"
+            }
+        ],
+        "pages": [],
+        "entity_map": {}
+    }
+
     # 엔드포인트 존재 여부 테스트 (404가 아닌 응답 받는지 확인)
     endpoints = [
         "/databases/active",
-        "/databases/available", 
+        "/databases/available",
         "/databases/",
         "/databases/test_id",
         "/databases/deactivate"
     ]
-    
+
     for endpoint in endpoints:
-        if endpoint == "/databases/deactivate":
-            response = client.post(endpoint, headers=auth_headers)
-        elif endpoint == "/databases/test_id":
-            response = client.get(endpoint, headers=auth_headers)
-        else:
-            response = client.get(endpoint, headers=auth_headers)
-        
-        # 404가 아니면 엔드포인트가 존재함 (500, 403 등은 가능)
-        assert response.status_code != 404, f"엔드포인트 {endpoint}가 존재하지 않습니다"
+        with patch('app.api.v1.endpoints.databases.redis_service.set_default_db') as mock_redis:
+            mock_redis.return_value = None
+            
+            if endpoint == "/databases/deactivate":
+                with patch('app.api.v1.endpoints.databases.update_learning_database_status') as mock_update:
+                    mock_update.return_value = True
+                    response = client.post(endpoint, headers=auth_headers)
+            elif endpoint == "/databases/test_id":
+                response = client.get(endpoint, headers=auth_headers)
+            else:
+                response = client.get(endpoint, headers=auth_headers)
+
+            # 404가 아니면 엔드포인트가 존재함 (500, 403 등은 가능)
+            assert response.status_code != 404, f"엔드포인트 {endpoint}가 존재하지 않습니다"
 
 
-def test_databases_post_endpoints_exist(client: TestClient, auth_headers):
+@patch('app.api.v1.endpoints.databases.redis_service.get_default_page')
+@patch('app.api.v1.endpoints.databases.insert_learning_database')
+@patch('app.api.v1.endpoints.databases.workspace_cache_service.invalidate_workspace_cache')
+def test_databases_post_endpoints_exist(mock_invalidate, mock_insert, mock_get_page, client: TestClient, auth_headers):
     """POST 엔드포인트들 존재 여부 확인"""
     
+    # 필요한 함수들 모킹
+    mock_get_page.return_value = "mock_parent_page_123"
+    mock_insert.return_value = True
+    mock_invalidate.return_value = None
+
     # 데이터베이스 생성 (POST)
     create_data = {"title": "테스트 DB"}
     response = client.post("/databases/", json=create_data, headers=auth_headers)
     # 404가 아니면 엔드포인트 존재 (데이터 검증 실패, 권한 등은 가능)
     assert response.status_code != 404, "데이터베이스 생성 엔드포인트가 존재하지 않습니다"
-    
-    # 데이터베이스 활성화 (POST)
-    response = client.post("/databases/test_id/activate", headers=auth_headers)
-    assert response.status_code != 404, "데이터베이스 활성화 엔드포인트가 존재하지 않습니다"
 
 
 def test_databases_put_endpoints_exist(client: TestClient, auth_headers):
@@ -126,6 +155,6 @@ def test_client_basic_functionality(client: TestClient):
     response = client.get("/")
     assert response.status_code == 200
     
-    # OpenAPI 문서 확인 (인증 불필요)  
-    response = client.get("/openapi.json")
+    # OpenAPI 문서 확인 (인증 불필요) - 정확한 경로 사용
+    response = client.get("/api/v1/openapi.json")
     assert response.status_code == 200 

@@ -100,9 +100,10 @@ def app(mock_supabase, mock_redis, test_user_id):
     test_app.state.supabase = mock_supabase
     test_app.state.redis = mock_redis
     
-    # 인증 의존성 오버라이드 - require_user를 직접 모킹
-    def mock_require_user():
-        return test_user_id
+    # 의존성 오버라이드
+    test_app.dependency_overrides[get_supabase] = lambda: mock_supabase
+    test_app.dependency_overrides[get_redis] = lambda: mock_redis
+    test_app.dependency_overrides[require_user] = lambda: test_user_id
     
     # 워크스페이스 의존성도 모킹
     def mock_get_user_workspace():
@@ -110,8 +111,8 @@ def app(mock_supabase, mock_redis, test_user_id):
     
     # NotionService 의존성을 더 정교하게 모킹
     def mock_get_notion_service():
-        """정교한 NotionService 모킹 - 실제 데이터 반환"""
-        mock_service = Mock()  # AsyncMock 대신 Mock 사용
+        """정교한 NotionService 모킹 - AsyncMock 사용"""
+        mock_service = AsyncMock()  # Mock 대신 AsyncMock 사용
         
         # get_active_database 모킹
         async def mock_get_active_database(db_info):
@@ -173,17 +174,32 @@ def app(mock_supabase, mock_redis, test_user_id):
             
             return MockUpdateResult()
         
+        # get_workspace_top_pages 모킹 (notion_setting에서 사용)
+        async def mock_get_workspace_top_pages():
+            return [
+                {
+                    "page_id": "top_page_1",
+                    "title": "최상위 페이지 1",
+                    "url": "https://notion.so/page1"
+                },
+                {
+                    "page_id": "top_page_2", 
+                    "title": "최상위 페이지 2",
+                    "url": "https://notion.so/page2"
+                }
+            ]
+        
         # 모킹된 메서드들을 서비스에 할당
         mock_service.get_active_database = mock_get_active_database
         mock_service.get_database = mock_get_database
         mock_service.create_database = mock_create_database
         mock_service.list_databases_in_page = mock_list_databases_in_page
         mock_service.update_database = mock_update_database
+        mock_service.get_workspace_top_pages = mock_get_workspace_top_pages
         
         return mock_service
     
-    # 의존성 오버라이드 적용
-    test_app.dependency_overrides[require_user] = mock_require_user
+            # 의존성 오버라이드 적용 - 불필요한 라인 제거
     test_app.dependency_overrides[get_supabase] = lambda: mock_supabase  
     test_app.dependency_overrides[get_redis] = lambda: mock_redis
     
@@ -204,40 +220,81 @@ def client(app) -> Generator[TestClient, None, None]:
 
 @pytest.fixture
 def mock_supabase():
-    """모킹된 Supabase 클라이언트"""
+    """모킹된 Supabase 클라이언트 - 더 정교한 체이닝 지원"""
     mock_client = AsyncMock()
     
-    # 체이닝 메서드를 위한 mock 객체들 설정
-    mock_table = AsyncMock()
-    mock_select = AsyncMock()
-    mock_insert = AsyncMock()
-    mock_update = AsyncMock()
-    mock_delete = AsyncMock()
-    mock_eq = AsyncMock()
-    mock_execute = AsyncMock()
-    
     # 기본 응답 데이터 설정
-    mock_response = AsyncMock()
-    mock_response.data = []
-    mock_response.count = 0
+    def create_mock_response(data=None, count=0):
+        mock_response = AsyncMock()
+        mock_response.data = data or []
+        mock_response.count = count
+        return mock_response
     
-    # 체이닝 구조 설정
-    mock_execute.return_value = mock_response
+    # table() 메서드를 AsyncMock으로 설정하고 return_value 지원
+    table_mock = AsyncMock()
     
-    mock_eq.return_value.execute = mock_execute
-    mock_select.return_value.eq = mock_eq
-    mock_select.return_value.execute = mock_execute
+    # select() 체이닝 모킹
+    select_mock = AsyncMock()
     
-    mock_insert.return_value.execute = mock_execute
-    mock_update.return_value.execute = mock_execute  
-    mock_delete.return_value.execute = mock_execute
+    # eq() 체이닝 모킹
+    eq_mock = AsyncMock()
+    eq_mock.execute = AsyncMock(return_value=create_mock_response([
+        {"id": "test_id", "data": "test"}
+    ], 1))
     
-    mock_table.select = mock_select
-    mock_table.insert = mock_insert
-    mock_table.update = mock_update
-    mock_table.delete = mock_delete
+    # limit() 체이닝 모킹
+    limit_mock = AsyncMock()
+    limit_mock.execute = AsyncMock(return_value=create_mock_response([
+        {"id": "test_id", "data": "test"}
+    ], 1))
     
-    mock_client.table.return_value = mock_table
+    # order() 체이닝 모킹
+    order_mock = AsyncMock()
+    order_mock.limit = AsyncMock(return_value=limit_mock)
+    order_mock.execute = AsyncMock(return_value=create_mock_response([
+        {"id": "test_id", "data": "test"}
+    ], 1))
+    
+    # select 체이닝 설정
+    select_mock.eq = AsyncMock(return_value=eq_mock)
+    select_mock.limit = AsyncMock(return_value=limit_mock)
+    select_mock.order = AsyncMock(return_value=order_mock)
+    select_mock.execute = AsyncMock(return_value=create_mock_response([
+        {"id": "test_id", "data": "test"}
+    ], 1))
+    
+    # insert() 체이닝 모킹
+    insert_mock = AsyncMock()
+    insert_mock.execute = AsyncMock(return_value=create_mock_response([
+        {"id": "new_id", "data": "test"}
+    ], 1))
+    
+    # update() 체이닝 모킹
+    update_mock = AsyncMock()
+    update_eq_mock = AsyncMock()
+    update_eq_mock.execute = AsyncMock(return_value=create_mock_response([
+        {"id": "updated_id", "data": "test"}
+    ], 1))
+    update_mock.eq = AsyncMock(return_value=update_eq_mock)
+    update_mock.execute = AsyncMock(return_value=create_mock_response([
+        {"id": "updated_id", "data": "test"}
+    ], 1))
+    
+    # delete() 체이닝 모킹
+    delete_mock = AsyncMock()
+    delete_eq_mock = AsyncMock()
+    delete_eq_mock.execute = AsyncMock(return_value=create_mock_response([], 0))
+    delete_mock.eq = AsyncMock(return_value=delete_eq_mock)
+    delete_mock.execute = AsyncMock(return_value=create_mock_response([], 0))
+    
+    # table mock 설정
+    table_mock.select = AsyncMock(return_value=select_mock)
+    table_mock.insert = AsyncMock(return_value=insert_mock)
+    table_mock.update = AsyncMock(return_value=update_mock)
+    table_mock.delete = AsyncMock(return_value=delete_mock)
+    
+    # 클라이언트에 table 메서드 설정 (return_value 지원)
+    mock_client.table = AsyncMock(return_value=table_mock)
     
     return mock_client
 

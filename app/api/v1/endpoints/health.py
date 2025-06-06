@@ -11,6 +11,11 @@ router = APIRouter()
 
 # ✅ Step 12: 헬스체크 엔드포인트 (24/7 운영 모니터링)
 
+@router.get("/")
+async def basic_health_check():
+    """기본 헬스체크 (Docker 및 로드밸런서용)"""
+    return {"status": "ok", "service": "notion-learning-api"}
+
 @router.get("/healthz")
 async def health_check():
     """기본 헬스체크 (Kubernetes Liveness Probe용)"""

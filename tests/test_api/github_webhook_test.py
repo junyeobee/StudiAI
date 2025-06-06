@@ -23,7 +23,11 @@ def test_github_webhook_endpoints_exist(client: TestClient, auth_headers):
 def test_github_webhook_public_endpoint(client: TestClient):
     with patch('app.api.v1.endpoints.github_webhook.GitHubWebhookHandler') as mock_handler:
         handler_instance = mock_handler.return_value
-        handler_instance.handle_webhook.return_value = {"status": "ok"}
+        # async 메서드로 모킹 - coroutine 반환
+        async def mock_handle_webhook(request):
+            return {"status": "ok"}
+        handler_instance.handle_webhook = mock_handle_webhook
+        
         response = client.post("/github_webhook_public/webhook_operation")
         assert response.status_code != 404
 

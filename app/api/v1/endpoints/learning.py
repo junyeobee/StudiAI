@@ -26,7 +26,7 @@ from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
 from fastapi import Depends
 from app.api.v1.dependencies.auth import require_user
-from app.api.v1.dependencies.workspace import get_user_workspace, get_user_workspace_with_fallback
+from app.api.v1.dependencies.workspace import get_user_workspace_with_fallback
 from app.api.v1.dependencies.notion import get_notion_service
 from app.utils.logger import api_logger
 from app.core.redis_connect import get_redis
@@ -37,7 +37,7 @@ router = APIRouter()
 redis_service = RedisService()
 
 @router.get("/pages")
-async def list_learning_pages(workspace_id: str = Depends(get_user_workspace), redis: redis.Redis = Depends(get_redis), current: bool = False, db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def list_learning_pages(workspace_id: str = Depends(get_user_workspace_with_fallback), redis: redis.Redis = Depends(get_redis), current: bool = False, db_id: str | None = None, supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """
     학습 페이지 목록 조회
     - current=true : 현재 used DB 기준
@@ -64,7 +64,7 @@ async def list_learning_pages(workspace_id: str = Depends(get_user_workspace), r
     }
 
 @router.post("/pages/create")
-async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(get_user_workspace), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
+async def create_pages(req: LearningPagesRequest, workspace_id: str = Depends(get_user_workspace_with_fallback), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
     notion_db_id = req.notion_db_id
     
     # WorkspaceCacheService를 사용해서 DB 목록 조회
@@ -161,7 +161,7 @@ async def get_content(page_id: str, notion_service: NotionService = Depends(get_
     }
 
 @router.delete("/pages/{page_id}")
-async def delete_page(page_id: str, workspace_id: str = Depends(get_user_workspace), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
+async def delete_page(page_id: str, workspace_id: str = Depends(get_user_workspace_with_fallback), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service), redis = Depends(get_redis)):
     await notion_service.delete_page(page_id)
     await delete_learning_page(page_id, supabase)
     

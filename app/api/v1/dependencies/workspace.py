@@ -21,6 +21,7 @@ async def get_user_workspace(
     Redis에서만 조회하며, 없으면 에러 발생
     """
     workspace_id = await redis_service.get_user_workspace(user_id, redis_client)
+
     if not workspace_id:
         raise HTTPException(
             status_code=404, 

@@ -24,7 +24,7 @@ from app.services.supa import (
     update_learning_database
 )
 from app.api.v1.dependencies.auth import require_user
-from app.api.v1.dependencies.workspace import get_user_workspace
+from app.api.v1.dependencies.workspace import get_user_workspace_with_fallback
 from app.core.config import settings
 from app.core.supabase_connect import get_supabase
 from supabase._async.client import AsyncClient
@@ -38,7 +38,7 @@ router = APIRouter()
 redis_service = RedisService()
 
 @router.get("/active")
-async def get_active_database(workspace_id: str = Depends(get_user_workspace), user_id: str = Depends(require_user), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def get_active_database(workspace_id: str = Depends(get_user_workspace_with_fallback), user_id: str = Depends(require_user), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """현재 활성화된 DB 조회"""
     # WorkspaceCacheService로 DB 목록 가져오기
     learning_data = await workspace_cache_service.get_workspace_learning_data(workspace_id, supabase, redis)
@@ -66,7 +66,7 @@ async def get_active_database(workspace_id: str = Depends(get_user_workspace), u
     return {"status": "success", "data": notion_db}
 
 @router.get("/available")
-async def get_available_databases(workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
+async def get_available_databases(workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
     """학습 가능한 DB 목록 조회 (used, ready 상태)"""
     # WorkspaceCacheService 사용
     learning_data = await workspace_cache_service.get_workspace_learning_data(workspace_id, supabase, redis)
@@ -78,7 +78,7 @@ async def get_available_databases(workspace_id: str = Depends(get_user_workspace
     return {"status": "success", "data": available_dbs}
 
 @router.get("/", response_model=List[DatabaseInfo])
-async def list_databases(workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
+async def list_databases(workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
     """모든 학습 DB 목록 조회 (모든 상태)"""
     # WorkspaceCacheService 사용
     learning_data = await workspace_cache_service.get_workspace_learning_data(workspace_id, supabase, redis)
@@ -87,7 +87,7 @@ async def list_databases(workspace_id: str = Depends(get_user_workspace), redis 
     return databases
 
 @router.get("/{db_id}", response_model=DatabaseResponse)
-async def get_database(db_id: str, user_id: str = Depends(require_user), workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), notion_service: NotionService = Depends(get_notion_service)):
+async def get_database(db_id: str, user_id: str = Depends(require_user), workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), notion_service: NotionService = Depends(get_notion_service)):
     """DB 정보 조회"""
     database = await notion_service.get_database(db_id, workspace_id)
     return DatabaseResponse(
@@ -97,7 +97,7 @@ async def get_database(db_id: str, user_id: str = Depends(require_user), workspa
     )
 
 @router.post("/", response_model=DatabaseResponse)
-async def create_database(db: DatabaseCreate, user_id: str = Depends(require_user), workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def create_database(db: DatabaseCreate, user_id: str = Depends(require_user), workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """새로운 DB 생성"""
     parent_page_id = await redis_service.get_default_page(user_id, workspace_id, redis)
     if not parent_page_id:
@@ -125,7 +125,7 @@ async def create_database(db: DatabaseCreate, user_id: str = Depends(require_use
     )
 
 @router.put("/{db_id}", response_model=DatabaseResponse)
-async def update_database(db_id: str, db_update: DatabaseUpdate, workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
+async def update_database(db_id: str, db_update: DatabaseUpdate, workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase), notion_service: NotionService = Depends(get_notion_service)):
     """DB 정보 업데이트"""
     notion_db = await notion_service.update_database(db_id, db_update)
     
@@ -156,7 +156,7 @@ async def update_database(db_id: str, db_update: DatabaseUpdate, workspace_id: s
     )
 
 @router.post("/{db_id}/activate")
-async def activate_database(db_id: str, workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
+async def activate_database(db_id: str, workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
     """데이터베이스 활성화"""
     result = await update_learning_database_status(db_id, "used", supabase, workspace_id)
     await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis)
@@ -168,7 +168,7 @@ async def activate_database(db_id: str, workspace_id: str = Depends(get_user_wor
     return {"status": "success", "message": "데이터베이스가 활성화되었습니다."}
 
 @router.post("/deactivate")
-async def deactivate_all_databases(workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
+async def deactivate_all_databases(workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), supabase: AsyncClient = Depends(get_supabase)):
     """활성화된 DB를 비활성화 상태로 변경합니다."""
     result = await update_learning_database_status(db_id=None, status="ready", supabase=supabase, workspace_id=workspace_id)
     await workspace_cache_service.invalidate_workspace_cache(workspace_id, redis)
@@ -181,7 +181,7 @@ async def deactivate_all_databases(workspace_id: str = Depends(get_user_workspac
     return {"status":"success", "message":"모든 데이터베이스를 비활성화했습니다."}
 
 @router.get("/pages/{page_id}/databases", response_model=List[DatabaseMetadata])
-async def get_page_databases(page_id: str, workspace_id: str = Depends(get_user_workspace), redis = Depends(get_redis), notion_service: NotionService = Depends(get_notion_service)):
+async def get_page_databases(page_id: str, workspace_id: str = Depends(get_user_workspace_with_fallback), redis = Depends(get_redis), notion_service: NotionService = Depends(get_notion_service)):
     """페이지 내의 모든 데이터베이스 목록 조회"""
     databases = await notion_service.list_databases_in_page(page_id, workspace_id)
     return databases 

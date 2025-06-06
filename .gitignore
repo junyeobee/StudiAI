@@ -5,3 +5,11 @@ logs/
 *.log
 .cursor/*
 testcode.py
+
+# 배포 관련 파일들 (로컬 개발에만 필요)
+Dockerfile*
+docker-compose*.yml
+supervisord.conf
+start-ngrok.sh
+*.sh
+.dockerignore

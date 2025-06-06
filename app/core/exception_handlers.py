@@ -27,6 +27,13 @@ from worker.monitor import QueueError
 
 async def _create_error_log_data(request: Request, exc: Exception) -> dict:
     """에러 로그 데이터 생성 헬퍼 함수"""
+    # 사용자 정보 추출 (미들웨어에서 설정됨)
+    user_id = getattr(request.state, 'user_id', None)
+    
+    # 추가 컨텍스트 정보 수집
+    user_agent = request.headers.get("User-Agent", "Unknown")
+    client_ip = request.client.host if request.client else "Unknown"
+    
     return {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "endpoint": request.url.path,
@@ -34,7 +41,10 @@ async def _create_error_log_data(request: Request, exc: Exception) -> dict:
         "exception_type": exc.__class__.__name__,
         "detail": str(exc),
         "stack_trace": traceback.format_exc(),
-        "user_id": getattr(request.state, 'user_id', None),
+        "user_id": user_id,  # 💡 미들웨어에서 설정된 사용자 ID
+        "user_agent": user_agent,
+        "client_ip": client_ip,
+        "query_params": str(request.url.query) if request.url.query else None,
         "version_tag": settings.APP_VERSION
     }
 
@@ -49,10 +59,12 @@ async def _save_error_and_respond(
     try:
         # 에러 로그 데이터 생성
         error_data = await _create_error_log_data(request, exc)
+        user_id = error_data.get("user_id")  # 데이터에서 user_id 추출
         
-        # 콘솔 로깅
+        # 콘솔 로깅 (사용자 정보 포함)
+        user_context = f"user:{user_id}" if user_id else "anonymous"
         api_logger.error(
-            f"[{exc.__class__.__name__}] {request.method} {request.url.path} - {str(exc)}", 
+            f"[{exc.__class__.__name__}] {request.method} {request.url.path} ({user_context}) - {str(exc)}", 
             exc_info=True
         )
         
