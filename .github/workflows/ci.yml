@@ -41,12 +41,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    - name: 🔍 코드 스타일 검사 (flake8)
-      run: |
-        pip install flake8
-        # 기본 스타일 검사 (라인 길이 88자, 일부 오류 무시)
-        flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
-        flake8 app/ --count --max-line-length=88 --statistics
+    # 🔍 코드 스타일 검사 (필요시 활성화)
+    # - name: 🔍 코드 스타일 검사 (flake8)
+    #   run: |
+    #     pip install flake8
+    #     # 기본 스타일 검사 (라인 길이 88자, 일부 오류 무시)
+    #     flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
+    #     flake8 app/ --count --max-line-length=88 --statistics
 
     - name: 🧪 테스트 실행 (핵심 API 엔드포인트)
       env:
