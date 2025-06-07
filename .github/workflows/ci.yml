@@ -19,7 +19,7 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - 9091:6379
+          - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
@@ -55,7 +55,7 @@ jobs:
         ENVIRONMENT: test
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        REDIS_URL: redis://localhost:9091
+        REDIS_URL: redis://localhost:6379
       run: |
         # 핵심 테스트만 실행 (86개 테스트 통과 기준)
         python -m pytest tests/test_api/ -v --tb=short
@@ -85,8 +85,8 @@ jobs:
           
           # 먼저 외부 Redis 연결 테스트
           echo "🔍 외부 Redis 연결 테스트..."
-          if redis-cli -h localhost -p 9091 ping > /dev/null 2>&1; then
-            echo "✅ GitHub Actions Redis (9091) 연결 확인"
+          if redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
+            echo "✅ GitHub Actions Redis (6379) 연결 확인"
           else
             echo "❌ GitHub Actions Redis 연결 실패"
             exit 1

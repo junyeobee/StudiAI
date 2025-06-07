@@ -10,9 +10,9 @@ services:
       - "8000:8000"
     environment:
       - ENVIRONMENT=test
-      - REDIS_URL=redis://host.docker.internal:9091
+      - REDIS_URL=redis://host.docker.internal:6379
       - REDIS_HOST=host.docker.internal
-      - REDIS_PORT=9091
+      - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
@@ -38,9 +38,9 @@ services:
       dockerfile: Dockerfile
     environment:
       - ENVIRONMENT=test
-      - REDIS_URL=redis://host.docker.internal:9091
+      - REDIS_URL=redis://host.docker.internal:6379
       - REDIS_HOST=host.docker.internal
-      - REDIS_PORT=9091
+      - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
