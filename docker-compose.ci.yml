@@ -1,0 +1,58 @@
+# CI 환경용 Docker Compose - 외부 Redis 사용
+
+services:
+  # FastAPI 애플리케이션 (외부 Redis 사용)
+  fastapi:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      - ENVIRONMENT=test
+      - REDIS_URL=redis://host.docker.internal:9091
+      - REDIS_HOST=host.docker.internal
+      - REDIS_PORT=9091
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-test_key}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-test_key}
+    volumes:
+      - .:/app
+      - /app/.venv  # 가상환경 제외
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # RQ Worker (외부 Redis 사용)
+  rq-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - ENVIRONMENT=test
+      - REDIS_URL=redis://host.docker.internal:9091
+      - REDIS_HOST=host.docker.internal
+      - REDIS_PORT=9091
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-test_key}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-test_key}
+      - PYTHONUNBUFFERED=1
+      - WORKER_MODE=fork
+      - RQ_WORKER_TIMEOUT=600
+    volumes:
+      - .:/app
+      - /app/.venv  # 가상환경 제외
+    command: python start_worker.py --mode basic --scaling false
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped 
