@@ -19,7 +19,7 @@ jobs:
       redis:
         image: redis:7-alpine
         ports:
-          - 9091:9091
+          - 9091:6379
         options: >-
           --health-cmd "redis-cli ping"
           --health-interval 10s
