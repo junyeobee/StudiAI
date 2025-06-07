@@ -1,4 +1,4 @@
-version: '3.8'
+# FastAPI + RQ 서버 Docker Compose 설정
 
 services:
   # FastAPI 애플리케이션 (메인 서비스)
@@ -10,9 +10,9 @@ services:
       - "8000:8000"
     environment:
       - ENVIRONMENT=development
-      - REDIS_URL=redis://redis:9091
+      - REDIS_URL=redis://redis:6379
       - REDIS_HOST=redis
-      - REDIS_PORT=9091
+      - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-default_password}
       - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
@@ -35,14 +35,14 @@ services:
   redis:
     image: public.ecr.aws/docker/library/redis:7-alpine
     ports:
-      - "9091:9091"  # 외부:내부 모두 9091로 통일
+      - "6379:6379"  # 표준 Redis 포트 사용
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD:-default_password}
-    command: redis-server --port 9091 --requirepass ${REDIS_PASSWORD:-default_password} --appendonly yes
+    command: redis-server --requirepass ${REDIS_PASSWORD:-default_password} --appendonly yes
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-p", "9091", "-a", "${REDIS_PASSWORD:-default_password}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-default_password}", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -54,20 +54,24 @@ services:
       dockerfile: Dockerfile
     environment:
       - ENVIRONMENT=development
-      - REDIS_URL=redis://redis:9091
+      - REDIS_URL=redis://redis:6379
       - REDIS_HOST=redis
-      - REDIS_PORT=9091
+      - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-default_password}
       - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-key}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-your-anthropic-key}
+      - PYTHONUNBUFFERED=1
+      - WORKER_MODE=fork
+      - RQ_WORKER_TIMEOUT=600
     depends_on:
-      - redis
+      redis:
+        condition: service_healthy
     volumes:
       - .:/app
       - /app/.venv  # 가상환경 제외
-    command: python start_worker.py --mode optimized --scaling true
+    command: python start_worker.py --mode basic --scaling false
     restart: unless-stopped
 
   # RQ Dashboard (RQ 작업 모니터링) - 임시 비활성화 (네트워크 문제)
