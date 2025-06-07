@@ -83,12 +83,36 @@ jobs:
           # 기존 컨테이너 정리
           docker compose -f docker-compose.ci.yml down -v || true
           
+          # Redis 서비스 디버깅
+          echo "🔍 Redis 서비스 디버깅..."
+          echo "1. Docker 컨테이너 상태 확인"
+          docker ps | grep redis || echo "Redis 컨테이너 없음"
+          
+          echo "2. 포트 사용 상태 확인"
+          ss -tulpn | grep 6379 || echo "6379 포트 사용 중인 프로세스 없음"
+          netstat -tulpn | grep 6379 || echo "netstat에서도 6379 포트 없음"
+          
+          echo "3. redis-cli 설치 여부 확인"
+          which redis-cli || echo "redis-cli 없음 - 설치 시도"
+          if ! command -v redis-cli &> /dev/null; then
+            echo "redis-cli 설치 중..."
+            sudo apt-get update && sudo apt-get install -y redis-tools
+          fi
+          
+          echo "4. Redis 서비스 헬스체크 상태"
+          docker inspect $(docker ps -q --filter "ancestor=redis:7-alpine") 2>/dev/null || echo "Redis 컨테이너 inspect 실패"
+          
+          echo "5. 네트워크 확인"
+          curl -v telnet://localhost:6379 || echo "telnet 연결 실패"
+          
           # 먼저 외부 Redis 연결 테스트
           echo "🔍 외부 Redis 연결 테스트..."
           if redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
             echo "✅ GitHub Actions Redis (6379) 연결 확인"
           else
             echo "❌ GitHub Actions Redis 연결 실패"
+            echo "redis-cli 직접 실행 결과:"
+            redis-cli -h localhost -p 6379 ping 2>&1 || echo "redis-cli 실행 실패"
             exit 1
           fi
           
