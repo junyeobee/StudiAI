@@ -14,17 +14,6 @@ jobs:
   test:
     name: 🧪 Test & Quality Check
     runs-on: ubuntu-latest
-    
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
 
     steps:
     - name: 📥 코드 체크아웃
@@ -55,7 +44,7 @@ jobs:
         ENVIRONMENT: test
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
-        REDIS_URL: redis://localhost:6379
+        REDIS_URL: redis://localhost:6379  # 로컬 테스트용 (Docker Compose는 자체 Redis 사용)
       run: |
         # 핵심 테스트만 실행 (86개 테스트 통과 기준)
         python -m pytest tests/test_api/ -v --tb=short
@@ -68,65 +57,42 @@ jobs:
         pip install pytest-cov
         python -m pytest tests/test_api/ --cov=app --cov-report=xml --cov-report=term
 
-    - name: 🐳 Docker Compose RQ Worker 통합 테스트 (외부 Redis 사용)
+    - name: 🐳 Docker Compose RQ Worker 통합 테스트 (내부 Redis 사용)
       env:
-        REDIS_PASSWORD: ""  # GitHub Actions Redis는 비밀번호 없음
+        REDIS_PASSWORD: ""
         SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'http://localhost:54321' }}
         SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY || 'test-service-key' }}
         OPENAI_API_KEY: test_key
         ANTHROPIC_API_KEY: test_key
       run: |
-        # CI 전용 docker compose로 RQ Worker 통합 테스트
+        # CI 전용 docker compose로 RQ Worker 통합 테스트 (자체 Redis 포함)
         if [ -f docker-compose.ci.yml ]; then
-          echo "🚀 RQ Worker 통합 테스트 시작..."
+          echo "🚀 RQ Worker 통합 테스트 시작 (자체 Redis 사용)..."
           
           # 기존 컨테이너 정리
           docker compose -f docker-compose.ci.yml down -v || true
           
-          # Redis 서비스 디버깅
-          echo "🔍 Redis 서비스 디버깅..."
-          echo "1. Docker 컨테이너 상태 확인"
-          docker ps | grep redis || echo "Redis 컨테이너 없음"
-          
-          echo "2. 포트 사용 상태 확인"
-          ss -tulpn | grep 6379 || echo "6379 포트 사용 중인 프로세스 없음"
-          netstat -tulpn | grep 6379 || echo "netstat에서도 6379 포트 없음"
-          
-          echo "3. redis-cli 설치 여부 확인"
-          which redis-cli || echo "redis-cli 없음 - 설치 시도"
-          if ! command -v redis-cli &> /dev/null; then
-            echo "redis-cli 설치 중..."
-            sudo apt-get update && sudo apt-get install -y redis-tools
-          fi
-          
-          echo "4. Redis 서비스 헬스체크 상태"
-          docker inspect $(docker ps -q --filter "ancestor=redis:7-alpine") 2>/dev/null || echo "Redis 컨테이너 inspect 실패"
-          
-          echo "5. 네트워크 확인"
-          curl -v telnet://localhost:6379 || echo "telnet 연결 실패"
-          
-          # 먼저 외부 Redis 연결 테스트
-          echo "🔍 외부 Redis 연결 테스트..."
-          if redis-cli -h localhost -p 6379 ping > /dev/null 2>&1; then
-            echo "✅ GitHub Actions Redis (6379) 연결 확인"
-          else
-            echo "❌ GitHub Actions Redis 연결 실패"
-            echo "redis-cli 직접 실행 결과:"
-            redis-cli -h localhost -p 6379 ping 2>&1 || echo "redis-cli 실행 실패"
-            exit 1
-          fi
-          
-          # 백그라운드에서 서비스 시작 (CI 전용 compose 사용)
-          echo "📦 FastAPI + RQ Worker 컨테이너 시작..."
+          # 백그라운드에서 서비스 시작 (CI 전용 compose 사용, 자체 Redis 포함)
+          echo "📦 Redis + FastAPI + RQ Worker 컨테이너 시작..."
           docker compose -f docker-compose.ci.yml up -d --build
           
           # 서비스들이 준비될 때까지 대기
           echo "⏳ 서비스 준비 대기 중..."
-          sleep 30
+          sleep 45
           
           # 컨테이너 상태 확인
           echo "🔍 컨테이너 상태 확인..."
           docker compose -f docker-compose.ci.yml ps
+          
+          # Redis 서비스 체크
+          echo "🏥 Redis 서비스 체크..."
+          if docker compose -f docker-compose.ci.yml ps redis | grep -q "Up"; then
+            echo "✅ Redis 컨테이너 정상 실행 중"
+          else
+            echo "❌ Redis 컨테이너 실행 실패"
+            docker compose -f docker-compose.ci.yml logs redis
+            exit 1
+          fi
           
           # FastAPI 서비스 체크
           echo "🏥 FastAPI 서비스 체크..."
@@ -148,14 +114,15 @@ jobs:
             exit 1
           fi
           
-          # Redis 큐 연결 테스트 (컨테이너 내부에서)
+          # RQ Worker Redis 연결 테스트 (동일 네트워크 내 redis:6379)
           echo "🏥 RQ Worker Redis 연결 테스트..."
-          REDIS_TEST_CMD="import redis; import os; r = redis.Redis(host=os.getenv('REDIS_HOST'), port=int(os.getenv('REDIS_PORT'))); print('Redis ping:', r.ping())"
+          REDIS_TEST_CMD="import redis; import os; r = redis.Redis(host='redis', port=6379); print('Redis ping:', r.ping())"
           if docker compose -f docker-compose.ci.yml exec -T rq-worker python -c "$REDIS_TEST_CMD" > /dev/null 2>&1; then
-            echo "✅ RQ Worker가 Redis에 정상 연결됨"
+            echo "✅ RQ Worker가 Redis에 정상 연결됨 (redis:6379)"
           else
             echo "❌ RQ Worker Redis 연결 실패"
             docker compose -f docker-compose.ci.yml logs rq-worker
+            docker compose -f docker-compose.ci.yml logs redis
             exit 1
           fi
           

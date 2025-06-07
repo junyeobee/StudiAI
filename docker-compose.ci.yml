@@ -1,7 +1,17 @@
-# CI 환경용 Docker Compose - 외부 Redis 사용
+# CI 환경용 Docker Compose - 내부 Redis 사용
 
 services:
-  # FastAPI 애플리케이션 (외부 Redis 사용)
+  # Redis (CI 전용)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+  # FastAPI 애플리케이션 (내부 Redis 사용)
   fastapi:
     build: 
       context: .
@@ -10,8 +20,8 @@ services:
       - "8000:8000"
     environment:
       - ENVIRONMENT=test
-      - REDIS_URL=redis://host.docker.internal:6379
-      - REDIS_HOST=host.docker.internal
+      - REDIS_URL=redis://redis:6379
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
@@ -22,8 +32,9 @@ services:
       - .:/app
       - /app/.venv  # 가상환경 제외
     command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -31,15 +42,15 @@ services:
       retries: 3
       start_period: 40s
 
-  # RQ Worker (외부 Redis 사용)
+  # RQ Worker (내부 Redis 사용)
   rq-worker:
     build:
       context: .
       dockerfile: Dockerfile
     environment:
       - ENVIRONMENT=test
-      - REDIS_URL=redis://host.docker.internal:6379
-      - REDIS_HOST=host.docker.internal
+      - REDIS_URL=redis://redis:6379
+      - REDIS_HOST=redis
       - REDIS_PORT=6379
       - REDIS_PASSWORD=${REDIS_PASSWORD:-}
       - SUPABASE_URL=${SUPABASE_URL:-http://localhost:54321}
@@ -53,6 +64,7 @@ services:
       - .:/app
       - /app/.venv  # 가상환경 제외
     command: python start_worker.py --mode basic --scaling false
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped 
