@@ -610,7 +610,7 @@ class CodeAnalysisService:
             try:
                 # OpenAI 클라이언트 설정 (로컬 LLM 서버)
                 client = OpenAI(
-                    base_url="http://127.0.0.1:1234/v1",
+                    base_url="http://172.27.208.1:1234/v1",
                     api_key="lm-studio"
                 )
                 
@@ -1002,7 +1002,7 @@ class CodeAnalysisService:
             try:
                 # OpenAI 클라이언트 설정 (로컬 LLM 서버)
                 client = OpenAI(
-                    base_url="http://127.0.0.1:1234/v1",
+                    base_url="http://172.27.208.1:1234/v1",
                     api_key="lm-studio"
                 )
                 
