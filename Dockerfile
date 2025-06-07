@@ -17,10 +17,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# 애플리케이션 코드 복사 (.env 제외)
+# 애플리케이션 코드 복사
 COPY . .
-# .env 파일이 있으면 복사 (선택적)
-RUN [ -f .env ] && echo ".env 파일 발견" || echo ".env 파일 없음 - 환경변수 사용"
 
 # 포트 노출
 EXPOSE 8000

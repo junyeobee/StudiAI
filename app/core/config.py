@@ -3,11 +3,7 @@
 """
 from pydantic_settings import BaseSettings
 from typing import List
-from dotenv import load_dotenv
-import os
 
-# .env 파일 로드
-load_dotenv("app/core/.env")
 class Settings(BaseSettings):
     # 프로젝트 정보
     PROJECT_NAME: str = "Notion Learning API"
@@ -40,17 +36,14 @@ class Settings(BaseSettings):
     REDIS_PASSWORD: str
 
     # GitHub OAuth
-    GITHUB_CLIENT_ID : str
-    GITHUB_SECRET_KEY : str
+    GITHUB_CLIENT_ID: str
+    GITHUB_SECRET_KEY: str
     
     # 보안 설정
     SECRET_KEY: str
-    
     ENCRYPTION_KEY: str
-
-    WEBHOOK_SECRET_KEY : str
-
-    API_BASE_URL:str
+    WEBHOOK_SECRET_KEY: str
+    API_BASE_URL: str
 
     # 로깅 설정
     LOG_LEVEL: str = "DEBUG"
@@ -60,4 +53,4 @@ class Settings(BaseSettings):
         env_file = "app/core/.env"
         case_sensitive = True
 
-settings = Settings() 
+settings = Settings()

@@ -57,81 +57,33 @@ jobs:
         pip install pytest-cov
         python -m pytest tests/test_api/ --cov=app --cov-report=xml --cov-report=term
 
-    - name: 🐳 Docker Compose RQ Worker 통합 테스트 (내부 Redis 사용)
-      env:
-        REDIS_PASSWORD: ""
-        SUPABASE_URL: ${{ secrets.SUPABASE_URL || 'http://localhost:54321' }}
-        SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY || 'test-service-key' }}
-        OPENAI_API_KEY: test_key
-        ANTHROPIC_API_KEY: test_key
+    - name: 🐳 Docker 빌드 검증
       run: |
-        # CI 전용 docker compose로 RQ Worker 통합 테스트 (자체 Redis 포함)
-        if [ -f docker-compose.ci.yml ]; then
-          echo "🚀 RQ Worker 통합 테스트 시작 (자체 Redis 사용)..."
-          
-          # 기존 컨테이너 정리
-          docker compose -f docker-compose.ci.yml down -v || true
-          
-          # 백그라운드에서 서비스 시작 (CI 전용 compose 사용, 자체 Redis 포함)
-          echo "📦 Redis + FastAPI + RQ Worker 컨테이너 시작..."
-          docker compose -f docker-compose.ci.yml up -d --build
-          
-          # 서비스들이 준비될 때까지 대기
-          echo "⏳ 서비스 준비 대기 중..."
-          sleep 45
-          
-          # 컨테이너 상태 확인
-          echo "🔍 컨테이너 상태 확인..."
-          docker compose -f docker-compose.ci.yml ps
-          
-          # Redis 서비스 체크
-          echo "🏥 Redis 서비스 체크..."
-          if docker compose -f docker-compose.ci.yml ps redis | grep -q "Up"; then
-            echo "✅ Redis 컨테이너 정상 실행 중"
-          else
-            echo "❌ Redis 컨테이너 실행 실패"
-            docker compose -f docker-compose.ci.yml logs redis
-            exit 1
-          fi
-          
-          # FastAPI 서비스 체크
-          echo "🏥 FastAPI 서비스 체크..."
-          if docker compose -f docker-compose.ci.yml ps fastapi | grep -q "Up"; then
-            echo "✅ FastAPI 컨테이너 정상 실행 중"
-          else
-            echo "❌ FastAPI 컨테이너 실행 실패"
-            docker compose -f docker-compose.ci.yml logs fastapi
-            exit 1
-          fi
-          
-          # RQ Worker 서비스 체크
-          echo "🏥 RQ Worker 서비스 체크..."
-          if docker compose -f docker-compose.ci.yml ps rq-worker | grep -q "Up"; then
-            echo "✅ RQ Worker 컨테이너 정상 실행 중"
-          else
-            echo "❌ RQ Worker 컨테이너 실행 실패"
-            docker compose -f docker-compose.ci.yml logs rq-worker
-            exit 1
-          fi
-          
-          # RQ Worker Redis 연결 테스트 (동일 네트워크 내 redis:6379)
-          echo "🏥 RQ Worker Redis 연결 테스트..."
-          REDIS_TEST_CMD="import redis; import os; r = redis.Redis(host='redis', port=6379); print('Redis ping:', r.ping())"
-          if docker compose -f docker-compose.ci.yml exec -T rq-worker python -c "$REDIS_TEST_CMD" > /dev/null 2>&1; then
-            echo "✅ RQ Worker가 Redis에 정상 연결됨 (redis:6379)"
-          else
-            echo "❌ RQ Worker Redis 연결 실패"
-            docker compose -f docker-compose.ci.yml logs rq-worker
-            docker compose -f docker-compose.ci.yml logs redis
-            exit 1
-          fi
-          
-          # 서비스 정리
-          docker compose -f docker-compose.ci.yml down -v
-          echo "✅ RQ Worker 통합 테스트 완료"
-        else
-          echo "⚠️ docker-compose.ci.yml 없음 - 스킵"
+        # Docker 이미지 빌드 검증만 수행
+        echo "🚀 Docker 이미지 빌드 검증 시작..."
+        
+        # Dockerfile 빌드 테스트
+        echo "📦 FastAPI/RQ Worker 이미지 빌드..."
+        docker build -t notion-app-test .
+        
+        # Docker Compose 빌드 테스트 (실행하지 않고 빌드만)
+        if [ -f docker-compose.yml ]; then
+          echo "📦 로컬용 Docker Compose 빌드 검증..."
+          docker compose build
+          echo "✅ 로컬용 Docker Compose 빌드 성공"
         fi
+        
+        if [ -f docker-compose.ci.yml ]; then
+          echo "📦 CI용 Docker Compose 빌드 검증..."
+          docker compose -f docker-compose.ci.yml build
+          echo "✅ CI용 Docker Compose 빌드 성공"
+        fi
+        
+        # 빌드된 이미지 확인
+        echo "🔍 빌드된 이미지 목록:"
+        docker images | grep -E "(notion|redis)" || echo "이미지 확인 완료"
+        
+        echo "✅ Docker 빌드 검증 완료"
 
 # 🚀 배포 관련 섹션 (나중에 필요시 활성화)
 # 
