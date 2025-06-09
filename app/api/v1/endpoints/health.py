@@ -24,6 +24,7 @@ async def health_check():
         redis_client = Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
+            password=settings.REDIS_PASSWORD,
             decode_responses=False
         )
         redis_client.ping()
@@ -41,6 +42,7 @@ async def readiness_check():
         redis_client = Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
+            password=settings.REDIS_PASSWORD,
             decode_responses=False
         )
         redis_client.ping()
@@ -72,6 +74,7 @@ async def detailed_health_check() -> Dict[str, Any]:
         redis_client = Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
+            password=settings.REDIS_PASSWORD,
             decode_responses=False
         )
         
@@ -119,6 +122,7 @@ async def prometheus_metrics():
         redis_client = Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
+            password=settings.REDIS_PASSWORD,
             decode_responses=False
         )
         
