@@ -74,15 +74,5 @@ services:
     command: python start_worker.py --mode basic --scaling false
     restart: unless-stopped
 
-  # RQ Dashboard (RQ 작업 모니터링) - 임시 비활성화 (네트워크 문제)
-  # rq-dashboard:
-  #   image: eoranged/rq-dashboard:latest
-  #   ports:
-  #     - "9181:9181"
-  #   environment:
-  #     - RQ_DASHBOARD_REDIS_URL=redis://redis:6379
-  #   depends_on:
-  #     - redis
-
 volumes:
   redis_data: 

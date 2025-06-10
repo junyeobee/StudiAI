@@ -32,7 +32,8 @@ os.environ.update({
     "ENCRYPTION_KEY": "test_encryption_key_32_characters!",
     "WEBHOOK_SECRET_KEY": "test_webhook_secret_key",
     "API_BASE_URL": "http://testserver",
-    "LOG_LEVEL": "DEBUG"
+    "LOG_LEVEL": "DEBUG",
+    "OPENAI_API_KEY": "test_openai_api_key"
 })
 
 from fastapi import FastAPI
