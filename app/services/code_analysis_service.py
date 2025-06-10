@@ -33,7 +33,7 @@ class CodeAnalysisService:
         self.redis_service = RedisService()
         self.supabase = supabase
         self.function_queue = asyncio.Queue()
-        self.api_key = settings.OPENAI_KEY
+        self.api_key = settings.OPENAI_API_KEY
     
     # ✅ Step 5: 공유 ThreadPoolExecutor 관리 메서드들
     @classmethod

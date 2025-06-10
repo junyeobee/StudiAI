@@ -2,46 +2,65 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main, master, develop ]
+    branches:
+      - master
+      - release
+    tags:
+      - 'v*.*.*'
   pull_request:
-    branches: [ main, master ]
+    branches: 
+      - release
 
 env:
   PYTHON_VERSION: '3.10'
   
 jobs:
-  # CI 단계: 테스트만 (현재 활성화)
   test:
-    name: 🧪 Test & Quality Check
+    name: 테스트 및 빌드
     runs-on: ubuntu-latest
 
     steps:
-    - name: 📥 코드 체크아웃
+    - name: 코드 체크아웃
       uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
 
-    - name: 🐍 Python 환경 설정
+    - name: Python 환경 설정
       uses: actions/setup-python@v4
       with:
         python-version: ${{ env.PYTHON_VERSION }}
         cache: 'pip'
 
-    - name: 📦 의존성 설치
+    - name: 배포 환경 확인
+      run: |
+        echo "🔗 GitHub Ref: ${{ github.ref }}"
+        echo "📋 Event Name: ${{ github.event_name }}"
+        if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+          echo "🏷️  태그 배포 감지: ${{ github.ref }}"
+        elif [[ "${{ github.ref }}" == "refs/heads/release" ]]; then
+          echo "🚀 Release 브랜치 배포: ${{ github.ref }}"
+        else
+          echo "🔧 기타 환경: ${{ github.ref }}"
+        fi
+
+    - name: 의존성 설치
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
 
-    # 🔍 코드 스타일 검사 (필요시 활성화)
-    # - name: 🔍 코드 스타일 검사 (flake8)
+    # 코드 스타일 검사 (임시 비활성화)
+    # - name: 코드 스타일 검사 (flake8)
     #   run: |
     #     pip install flake8
     #     # 기본 스타일 검사 (라인 길이 88자, 일부 오류 무시)
     #     flake8 app/ --count --select=E9,F63,F7,F82 --show-source --statistics
     #     flake8 app/ --count --max-line-length=88 --statistics
 
-    - name: 🧪 테스트 실행 (핵심 API 엔드포인트)
+    - name: 테스트 실행 (핵심 API 엔드포인트)
       env:
         # 테스트용 환경변수
         ENVIRONMENT: test
+        GITHUB_REF: ${{ github.ref }}  # 🎯 브랜치/태그 정보 전달
         SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
         SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_KEY }}
         REDIS_URL: redis://localhost:6379  # 로컬 테스트용 (Docker Compose는 자체 Redis 사용)
@@ -52,15 +71,18 @@ jobs:
         python -m pytest tests/test_api/notion_webhook_test.py -v
         echo "✅ 핵심 API 테스트 완료"
         
-    - name: 📊 테스트 커버리지 보고서
+    - name: 테스트 커버리지 보고서
       run: |
         pip install pytest-cov
         python -m pytest tests/test_api/ --cov=app --cov-report=xml --cov-report=term
 
-    - name: 🐳 Docker 빌드 검증
+    - name: Docker 빌드 검증
+      env:
+        GITHUB_REF: ${{ github.ref }}  # 🎯 브랜치/태그 정보 전달
       run: |
         # Docker 이미지 빌드 검증만 수행
         echo "🚀 Docker 이미지 빌드 검증 시작..."
+        echo "📋 빌드 대상: $GITHUB_REF"
         
         # Dockerfile 빌드 테스트
         echo "📦 FastAPI/RQ Worker 이미지 빌드..."
@@ -84,35 +106,3 @@ jobs:
         docker images | grep -E "(notion|redis)" || echo "이미지 확인 완료"
         
         echo "✅ Docker 빌드 검증 완료"
-
-# 🚀 배포 관련 섹션 (나중에 필요시 활성화)
-# 
-# jobs:
-#   deploy:
-#     name: 🚀 자동 배포 & 재시작
-#     needs: test
-#     runs-on: ubuntu-latest
-#     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-#     
-#     steps:
-#     - name: 📥 코드 체크아웃
-#       uses: actions/checkout@v4
-#       
-#     - name: 🐳 Docker 이미지 빌드 & 태깅
-#       run: |
-#         VERSION_TAG=${GITHUB_SHA::8}-$(date +%Y%m%d%H%M)
-#         docker build -t notion-lms:$VERSION_TAG .
-#         docker tag notion-lms:$VERSION_TAG notion-lms:latest
-#         echo "VERSION_TAG=$VERSION_TAG" >> $GITHUB_ENV
-#
-#     - name: 🔄 서버 배포
-#       uses: appleboy/ssh-action@v1.0.0
-#       with:
-#         host: ${{ secrets.DEPLOY_HOST }}
-#         username: ${{ secrets.DEPLOY_USER }}
-#         key: ${{ secrets.DEPLOY_SSH_KEY }}
-#         script: |
-#           docker pull notion-lms:latest
-#           docker stop notion-lms || true
-#           docker rm notion-lms || true
-#           docker run -d --name notion-lms -p 8000:8000 notion-lms:latest 
