@@ -58,9 +58,9 @@ async def get_top_level_pages(
     print("완료")
     return {"status": "success", "data": {"pages": top_pages}, "message": "워크스페이스 페이지 목록 조회 성공", "source": "api"}
 
-@router.get("/set-top-page")
+@router.get("/set-top-page/{page_id}")
 async def set_top_page(
-    page_id:str,
+    page_id: str,
     user_id: str = Depends(require_user),
     workspace_id: str = Depends(get_notion_workspace),
     redis = Depends(get_redis),

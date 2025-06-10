@@ -88,9 +88,9 @@ ACTION_MAP: dict[Group, dict[str, Route]] = {
     },
     Group.NOTION_SETTINGS: {
         "workspaces": {"method":"GET", "path":_const("/workspaces"), "needs_json":False},
-        "set_active_workspace": {"method":"POST", "path":_const("/workspaces/active"), "needs_json":True},
+        "set_active_workspace": {"method":"POST", "path":lambda p:f"/workspaces/{p['workspace_id']}/active", "needs_json":True},
         "top_pages": {"method":"GET", "path":_const("/top-pages"), "needs_json":False},
-        "set_top_page": {"method":"GET", "path":_const("/set-top-page"), "needs_json":False},
+        "set_top_page": {"method":"GET", "path":lambda p:f"/set-top-page/{p['page_id']}", "needs_json":False},
         "get_top_page": {"method":"GET", "path":_const("/get-top-page"), "needs_json":False},
     },
     Group.AUTH :{
