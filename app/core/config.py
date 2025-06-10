@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     WEBHOOK_SECRET_KEY: str
     API_BASE_URL: str
 
+    # API Key
+    OPENAI_KEY: str
+
     # 로깅 설정
     LOG_LEVEL: str = "DEBUG"
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

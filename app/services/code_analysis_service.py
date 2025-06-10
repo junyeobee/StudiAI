@@ -16,6 +16,7 @@ from app.services.notion_service import NotionService
 from app.services.auth_service import get_integration_token
 import uuid
 import traceback
+from app.core.config import settings
 # 버퍼링 비활성화
 os.environ["PYTHONUNBUFFERED"] = "1"
 import concurrent.futures
@@ -32,6 +33,7 @@ class CodeAnalysisService:
         self.redis_service = RedisService()
         self.supabase = supabase
         self.function_queue = asyncio.Queue()
+        self.api_key = settings.OPENAI_KEY
     
     # ✅ Step 5: 공유 ThreadPoolExecutor 관리 메서드들
     @classmethod
@@ -608,19 +610,18 @@ class CodeAnalysisService:
         def _sync_llm_call():
             """동기식 LLM 호출 (내부 타임아웃 30초)"""
             try:
-                # OpenAI 클라이언트 설정 (로컬 LLM 서버)
+                # OpenAI 클라이언트 설정 (GPT-4o mini API)
                 client = OpenAI(
-                    base_url="http://172.27.208.1:1234/v1",
-                    api_key="lm-studio"
+                    api_key=self.api_key
                 )
                 
                 response = client.chat.completions.create(
-                    model="meta-llama-3-8b-instruct",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "당신은 코드 분석 전문가입니다. 주어진 함수를 분석하여 명확하고 유용한 정보를 제공하세요."},
                         {"role": "user", "content": full_prompt}
                     ],
-                    timeout=300  # ✅ Step 6: LLM 내부 타임아웃 (함수: 150초, 로컬 LLM 최적화)
+                    timeout=60  # ✅ Step 6: LLM 내부 타임아웃 (함수: 60초, GPT-4o mini 최적화)
                 )
                 
                 return response.choices[0].message.content
@@ -636,18 +637,18 @@ class CodeAnalysisService:
             # ✅ Step 5: 공유 ThreadPoolExecutor 사용
             executor = await self._get_shared_executor()
             
-            # ✅ Step 6: 이중 타임아웃 (LLM 150초 + asyncio 180초, 로컬 LLM 최적화)
+            # ✅ Step 6: 이중 타임아웃 (LLM 60초 + asyncio 90초, GPT-4o mini 최적화)
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(executor, _sync_llm_call),
-                timeout=360  # ✅ Step 6: 외부 타임아웃 (180초, 로컬 LLM 최적화)
+                timeout=90  # ✅ Step 6: 외부 타임아웃 (90초, GPT-4o mini 최적화)
             )
             
             api_logger.info(f"함수 '{func_info['name']}' LLM 분석 완료")
             return result
             
         except asyncio.TimeoutError:
-            api_logger.error(f"함수 '{func_info['name']}' LLM 호출 타임아웃 (180초)")
+            api_logger.error(f"함수 '{func_info['name']}' LLM 호출 타임아웃 (90초)")
             return f"**기능 요약**: {func_info['name']} 함수\n**분석 상태**: 타임아웃으로 인한 분석 실패"
         except Exception as e:
             api_logger.error(f"비동기 LLM 호출 실패: {e}")
@@ -1000,19 +1001,18 @@ class CodeAnalysisService:
         def _sync_file_analysis_call():
             """동기식 파일 분석 LLM 호출 (내부 타임아웃 60초)"""
             try:
-                # OpenAI 클라이언트 설정 (로컬 LLM 서버)
+                # OpenAI 클라이언트 설정 (GPT-4o mini API)
                 client = OpenAI(
-                    base_url="http://172.27.208.1:1234/v1",
-                    api_key="lm-studio"
+                    api_key=self.api_key
                 )
                 
                 response = client.chat.completions.create(
-                    model="meta-llama-3-8b-instruct",
+                    model="gpt-4o-mini",
                     messages=[
                         {"role": "system", "content": "당신은 소프트웨어 아키텍처 전문가입니다. 파일 전체의 구조와 흐름을 분석하여 개선 방안을 제시하세요."},
                         {"role": "user", "content": prompt}
                     ],
-                    timeout=240  # ✅ Step 6: LLM 내부 타임아웃 (파일: 240초, 로컬 LLM 최적화)
+                    timeout=120  # ✅ Step 6: LLM 내부 타임아웃 (파일: 120초, GPT-4o mini 최적화)
                 )
                 
                 return response.choices[0].message.content
@@ -1025,7 +1025,7 @@ class CodeAnalysisService:
 타임아웃으로 인한 분석 실패
 
 ## 📝 분석 상태
-LLM 호출 타임아웃 (300초)
+LLM 호출 타임아웃 (120초)
 """
         
         try:
@@ -1034,24 +1034,24 @@ LLM 호출 타임아웃 (300초)
             # ✅ Step 5: 공유 ThreadPoolExecutor 사용
             executor = await self._get_shared_executor()
             
-            # ✅ Step 6: 이중 타임아웃 (LLM 240초 + asyncio 300초, 로컬 LLM 최적화)
+            # ✅ Step 6: 이중 타임아웃 (LLM 120초 + asyncio 150초, GPT-4o mini 최적화)
             loop = asyncio.get_event_loop()
             result = await asyncio.wait_for(
                 loop.run_in_executor(executor, _sync_file_analysis_call),
-                timeout=360  # ✅ Step 6: 외부 타임아웃 (300초, 로컬 LLM 최적화)
+                timeout=150  # ✅ Step 6: 외부 타임아웃 (150초, GPT-4o mini 최적화)
             )
             
             api_logger.info("파일 전체 분석 LLM 호출 완료")
             return result
             
         except asyncio.TimeoutError:
-            api_logger.error("파일 분석 LLM 호출 타임아웃 (300초)")
+            api_logger.error("파일 분석 LLM 호출 타임아웃 (150초)")
             return f"""
 ## 🏛️ 아키텍처 분석
 타임아웃으로 인한 분석 실패
 
 ## 📝 분석 상태
-LLM 호출 타임아웃 (300초)
+LLM 호출 타임아웃 (150초)
 """
         except Exception as e:
             api_logger.error(f"비동기 파일 분석 LLM 호출 실패: {e}")
