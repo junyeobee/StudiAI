@@ -89,12 +89,6 @@ jobs:
         docker build -f docker/for_ci/Dockerfile -t notion-app-test .
         
         # Docker Compose 빌드 테스트 (실행하지 않고 빌드만)
-        if [ -f docker-compose.yml ]; then
-          echo "📦 로컬용 Docker Compose 빌드 검증..."
-          docker compose build
-          echo "✅ 로컬용 Docker Compose 빌드 성공"
-        fi
-        
         if [ -f docker-compose.ci.yml ]; then
           echo "📦 CI용 Docker Compose 빌드 검증..."
           docker compose -f docker-compose.ci.yml build

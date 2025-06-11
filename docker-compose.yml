@@ -33,7 +33,7 @@ services:
   rq-worker:
     build:
       context: .
-      dockerfile: docker/rq_worker/Dockerfile
+      dockerfile: docker/rq_server/Dockerfile
     environment:
       - ENVIRONMENT=development
       - REDIS_URL=redis://redis:6379
