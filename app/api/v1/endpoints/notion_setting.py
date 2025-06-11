@@ -1,4 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
+from supabase._async.client import AsyncClient
+from redis import Redis
 from app.core.supabase_connect import get_supabase
 from app.core.redis_connect import get_redis
 from app.api.v1.dependencies.auth import require_user
@@ -15,7 +17,7 @@ redis_service = RedisService()
 @router.get("/workspaces")
 async def list_workspaces(
     user_id: str = Depends(require_user), 
-    supabase = Depends(get_supabase),
+    supabase: AsyncClient = Depends(get_supabase),
     _: NotionService = Depends(get_notion_service)
 ):
     """사용자의 Notion 워크스페이스 목록 조회"""
@@ -30,8 +32,8 @@ async def list_workspaces(
 async def set_active_workspace(
     update: WorkspaceStatusUpdate, 
     user_id: str = Depends(require_user), 
-    supabase = Depends(get_supabase), 
-    redis = Depends(get_redis),
+    supabase: AsyncClient = Depends(get_supabase), 
+    redis: Redis = Depends(get_redis),
     _: NotionService = Depends(get_notion_service)
 ):
     """활성 워크스페이스 설정"""
@@ -44,7 +46,7 @@ async def get_top_level_pages(
     user_id: str = Depends(require_user),
     workspace_id: str = Depends(get_notion_workspace),
     notion_service: NotionService = Depends(get_notion_service), 
-    redis = Depends(get_redis)
+    redis: Redis = Depends(get_redis)
 ):
     """현재 활성 워크스페이스의 최상위 페이지 목록 조회"""
     top_pages = await redis_service.get_workspace_pages(user_id, workspace_id, redis)
@@ -63,7 +65,7 @@ async def set_top_page(
     page_id: str,
     user_id: str = Depends(require_user),
     workspace_id: str = Depends(get_notion_workspace),
-    redis = Depends(get_redis),
+    redis: Redis = Depends(get_redis),
     _: NotionService = Depends(get_notion_service)
 ):
     """default 최상위 페이지 설정"""
@@ -75,7 +77,7 @@ async def set_top_page(
 async def get_top_page(
     user_id: str = Depends(require_user),
     workspace_id: str = Depends(get_notion_workspace),
-    redis = Depends(get_redis),
+    redis: Redis = Depends(get_redis),
     _: NotionService = Depends(get_notion_service)
 ):
     """default 최상위 페이지 조회"""
