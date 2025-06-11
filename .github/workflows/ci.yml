@@ -86,7 +86,7 @@ jobs:
         
         # Dockerfile 빌드 테스트
         echo "📦 FastAPI/RQ Worker 이미지 빌드..."
-        docker build -t notion-app-test .
+        docker build -f docker/for_ci/Dockerfile -t notion-app-test .
         
         # Docker Compose 빌드 테스트 (실행하지 않고 빌드만)
         if [ -f docker-compose.yml ]; then
