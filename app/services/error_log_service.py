@@ -3,6 +3,7 @@ from typing import Optional
 from supabase._async.client import AsyncClient
 from app.utils.logger import api_logger
 from app.core.config import settings
+import asyncio
 
 async def save_error_to_db(
     supabase: AsyncClient,
@@ -14,7 +15,8 @@ async def save_error_to_db(
     detail: str,
     stack_trace: Optional[str] = None,
     user_id: Optional[str] = None,
-    version_tag: Optional[str] = None
+    version_tag: Optional[str] = None,
+    **kwargs # 예상치 못한 추가 인자들을 처리하기 위해 추가
 ) -> bool:
     """
     에러 정보를 Supabase error_logs 테이블에 저장
@@ -34,6 +36,10 @@ async def save_error_to_db(
         저장 성공 여부
     """
     try:
+        # await supabase if it's a coroutine
+        if asyncio.iscoroutine(supabase):
+            supabase = await supabase
+        
         # 환경 변수에서 버전 태그 가져오기 (없으면 "unknown")
         if version_tag is None:
             version_tag = settings.APP_VERSION

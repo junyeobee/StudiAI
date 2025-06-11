@@ -102,7 +102,10 @@ def app(mock_supabase, mock_redis, test_user_id):
     test_app.state.redis = mock_redis
     
     # 의존성 오버라이드
-    test_app.dependency_overrides[get_supabase] = lambda: mock_supabase
+    async def override_get_supabase():
+        return mock_supabase
+
+    test_app.dependency_overrides[get_supabase] = override_get_supabase
     test_app.dependency_overrides[get_redis] = lambda: mock_redis
     test_app.dependency_overrides[require_user] = lambda: test_user_id
     
@@ -200,13 +203,6 @@ def app(mock_supabase, mock_redis, test_user_id):
         
         return mock_service
     
-            # 의존성 오버라이드 적용 - 불필요한 라인 제거
-    test_app.dependency_overrides[get_supabase] = lambda: mock_supabase  
-    test_app.dependency_overrides[get_redis] = lambda: mock_redis
-    
-    from app.api.v1.dependencies.workspace import get_user_workspace
-    from app.api.v1.dependencies.notion import get_notion_service
-    test_app.dependency_overrides[get_user_workspace] = mock_get_user_workspace
     test_app.dependency_overrides[get_notion_service] = mock_get_notion_service
     
     return test_app

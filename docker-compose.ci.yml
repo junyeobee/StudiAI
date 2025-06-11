@@ -1,4 +1,4 @@
-# CI 환경용 Docker Compose - 내부 Redis 사용
+# CI용 DOCKER COMPOSE
 
 services:
   # Redis (CI 전용)
@@ -15,7 +15,7 @@ services:
   fastapi:
     build: 
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/for_ci/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -46,7 +46,7 @@ services:
   rq-worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/for_ci/Dockerfile
     environment:
       - ENVIRONMENT=test
       - REDIS_URL=redis://redis:6379

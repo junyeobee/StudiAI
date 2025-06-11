@@ -5,7 +5,7 @@ services:
   fastapi:
     build: 
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/fastapi/Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -18,8 +18,6 @@ services:
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:-your-service-key}
       - OPENAI_API_KEY=${OPENAI_API_KEY:-your-openai-key}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-your-anthropic-key}
-    depends_on:
-      - redis
     volumes:
       - .:/app
       - /app/.venv  # 가상환경 제외
@@ -31,27 +29,11 @@ services:
       retries: 3
       start_period: 40s
 
-  # Redis (RQ 작업 큐용)
-  redis:
-    image: public.ecr.aws/docker/library/redis:7-alpine
-    ports:
-      - "9091:6379"  # 외부 포트 9091로 내부 포트 6379 매핑
-    environment:
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-default_password}
-    command: redis-server --requirepass ${REDIS_PASSWORD:-default_password} --appendonly yes
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-default_password}", "ping"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-
   # RQ Worker
   rq-worker:
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: docker/rq_worker/Dockerfile
     environment:
       - ENVIRONMENT=development
       - REDIS_URL=redis://redis:6379
@@ -65,9 +47,6 @@ services:
       - PYTHONUNBUFFERED=1
       - WORKER_MODE=fork
       - RQ_WORKER_TIMEOUT=600
-    depends_on:
-      redis:
-        condition: service_healthy
     volumes:
       - .:/app
       - /app/.venv  # 가상환경 제외
