@@ -203,6 +203,9 @@ def app(mock_supabase, mock_redis, test_user_id):
         
         return mock_service
     
+    from app.api.v1.dependencies.workspace import get_user_workspace
+    from app.api.v1.dependencies.notion import get_notion_service
+    test_app.dependency_overrides[get_user_workspace] = mock_get_user_workspace
     test_app.dependency_overrides[get_notion_service] = mock_get_notion_service
     
     return test_app
