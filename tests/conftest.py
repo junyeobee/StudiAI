@@ -330,17 +330,17 @@ def auth_headers(test_api_key):
 
 @pytest.fixture
 async def mock_auth_dependencies(app, mock_supabase, mock_redis, test_user_id):
-    """인증 의존성 모킹"""
+    """인증 관련 의존성 모킹"""
     
-    # Supabase 의존성 오버라이드
-    def get_mock_supabase():
+    async def get_mock_supabase():
         return mock_supabase
-    
+
     def get_mock_redis():
         return mock_redis
     
     app.dependency_overrides[get_supabase] = get_mock_supabase
     app.dependency_overrides[get_redis] = get_mock_redis
+    app.dependency_overrides[require_user] = lambda: test_user_id
     
     # verify_api_key 함수 모킹
     original_verify = verify_api_key
