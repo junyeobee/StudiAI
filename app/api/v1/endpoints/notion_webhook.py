@@ -47,7 +47,7 @@ async def handle_notion_webhook(
     # 헤더 및 바디 파싱
     headers = request.headers
     body = await request.body()
-    
+    api_logger.info(f"body: {headers}")
     # 시그니처 검증
     notion_signature = headers.get("x-notion-signature")
     if not notion_signature:
