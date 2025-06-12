@@ -47,6 +47,7 @@ def create_redis_connection():
         host=redis_host,
         port=redis_port,
         password=redis_password,
+        username="default",
         socket_timeout=10,  # 읽기 타임아웃
         socket_connect_timeout=5,  # 연결 타임아웃
         retry_on_timeout=True,
