@@ -47,25 +47,34 @@ async def handle_notion_webhook(
     # 헤더 및 바디 파싱
     headers = request.headers
     body = await request.body()
+    
+    # --- START: 요청 본문 로깅 ---
+    try:
+        api_logger.info(f"body: {body}")
+        decoded_body = body.decode('utf-8')
+        api_logger.info(f"수신된 Notion 웹훅 본문: {decoded_body}")
+    except Exception as e:
+        api_logger.error(f"웹훅 본문 디코딩 또는 로깅 실패: {e}")
+    # --- END: 요청 본문 로깅 ---
+
     api_logger.info(f"body: {headers}")
     # 시그니처 검증
-    # 임시 비활성화: Notion 웹훅 URL 등록 후 반드시 주석을 해제하고 다시 활성화해야 합니다.
-    # notion_signature = headers.get("x-notion-signature")
-    # if not notion_signature:
-    #     # 시그니처 헤더 누락 (사용자/클라이언트 실수)
-    #     api_logger.warning("시그니처 헤더가 없음")
-    #     raise HTTPException(status_code=401, detail="Missing signature header")
-    #     
-    # if not verify_signature(body, notion_signature):
-    #     # 잘못된 시그니처 (사용자/클라이언트 실수)
-    #     api_logger.warning(f"잘못된 시그니처: {notion_signature}")
-    #     raise HTTPException(status_code=401, detail="Invalid signature")
+    notion_signature = headers.get("x-notion-signature")
+    if not notion_signature:
+        # 시그니처 헤더 누락 (사용자/클라이언트 실수)
+        api_logger.warning("시그니처 헤더가 없음")
+        raise HTTPException(status_code=401, detail="Missing signature header")
+        
+    #if not verify_signature(body, notion_signature):
+        # 잘못된 시그니처 (사용자/클라이언트 실수)
+        #api_logger.warning(f"잘못된 시그니처: {notion_signature}")
+        #raise HTTPException(status_code=401, detail="Invalid signature")
     
     # api_logger.info("시그니처 검증 성공")
     
     payload = json.loads(body.decode())
     
-    api_logger.info(f"웹훅 수신: {payload.get('type')} from workspace {payload.get('workspace_id')}")
+    #api_logger.info(f"웹훅 수신: {payload.get('type')} from workspace {payload.get('workspace_id')}")
     
     # 웹훅 핸들러에 위임 (커스텀 예외는 자동 전파됨)
     await webhook_handler.process_webhook_event(payload, supabase, redis_client)
