@@ -67,7 +67,7 @@ class Settings(BaseSettings):
     API_BASE_URL: str
 
     # API Key
-    OPENAI_API_KEY: str  # 🔧 OPENAI_KEY → OPENAI_API_KEY로 통일
+    OPENAI_API_KEY: str
 
     # 로깅 설정
     LOG_LEVEL: str = "DEBUG"

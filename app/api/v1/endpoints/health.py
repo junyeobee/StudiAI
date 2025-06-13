@@ -13,12 +13,12 @@ router = APIRouter()
 
 @router.get("/")
 async def basic_health_check():
-    """기본 헬스체크 (Docker 및 로드밸런서용)"""
+    """기본 헬스체크 (FastAPI 헬스체크)"""
     return {"status": "ok", "service": "notion-learning-api"}
 
 @router.get("/healthz")
 async def health_check():
-    """기본 헬스체크 (Kubernetes Liveness Probe용)"""
+    """기본 헬스체크 (Redis 연결 체크(RQ서버))"""
     try:
         # Redis 연결 확인
         redis_client = Redis(

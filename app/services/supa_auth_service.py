@@ -9,7 +9,7 @@ from app.models.notion_workspace import UserWorkspace,UserWorkspaceList
 async def get_user_by_key_hash(hashed_key: str, supabase: AsyncClient):
     """해시된 API 키로 유저 조회"""
     try:
-        res = await supabase.table("mcp_users") \
+        res = supabase.table("mcp_users") \
                          .select("user_id") \
                          .eq("auth_token", hashed_key) \
                          .execute()
