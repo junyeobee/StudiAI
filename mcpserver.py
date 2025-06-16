@@ -64,6 +64,10 @@ async def auth_tool(action: str, params: dict[str, Any]) -> str:
 async def github_webhook_tool(action: str, params: dict[str, Any]) -> str:
     return await MCPTools.github_webhook_tool(action, params)
 
+@mcp.tool(description=MCPTools.feedback_tool.__doc__)
+async def feedback_tool(action: str, params: dict[str, Any]) -> str:
+    return await MCPTools.feedback_tool(action, params)
+
 @mcp.tool(description=MCPTools.helper.__doc__)
 def helper(action: str) -> str:
     return MCPTools.helper(action)
