@@ -10,9 +10,21 @@ async def get_user_by_key_hash(hashed_key: str, supabase: AsyncClient):
     """해시된 API 키로 유저 조회"""
     try:
         res = supabase.table("mcp_users") \
-                         .select("user_id") \
-                         .eq("auth_token", hashed_key) \
-                         .execute()
+                        .select("user_id") \
+                        .eq("auth_token", hashed_key) \
+                        .execute()
+        return res
+    except Exception as e:
+        api_logger.error(f"유저 조회 실패: {str(e)}")
+        raise DatabaseError(e)
+    
+async def get_user_by_key_hash_async(hashed_key: str, supabase: AsyncClient):
+    """해시된 API 키로 유저 조회"""
+    try:
+        res = await supabase.table("mcp_users") \
+                            .select("user_id") \
+                            .eq("auth_token", hashed_key) \
+                            .execute()
         return res
     except Exception as e:
         api_logger.error(f"유저 조회 실패: {str(e)}")

@@ -60,7 +60,7 @@ async def update_learning_database_status(db_id: Optional[str], status: str, sup
             .eq("status", "used") \
             .eq("workspace_id", workspace_id) \
             .execute()
-        print(resp)
+        
         old_id = resp.data[0]["id"] if resp.data else None
 
         # 비활성화 요청 시, 활성화된 DB가 없으면 바로 None 반환
@@ -70,20 +70,14 @@ async def update_learning_database_status(db_id: Optional[str], status: str, sup
         # RPC
         new_db_id_param = db_id if status == "used" else None
         res = await supabase.rpc("activate_db_transaction", {
+            "workspace_id": workspace_id,
             "old_rec_id": old_id,
             "new_db_id":  new_db_id_param
         }).execute()
         
-        data = res.data
-        if not data:
-            return None
-
-        if isinstance(data, list):
-            return data[0]
-        if isinstance(data, dict):
-            return data
-
-        return None
+        data = res.data[0] if isinstance(res.data, list) and res.data else res.data
+        
+        return data
         
     except Exception as e:
         api_logger.error(f"DB 상태 업데이트 실패(db_id={db_id}, status={status}): {e}")
@@ -557,3 +551,15 @@ async def get_webhook_operation_detail(operation_id: str, supabase: AsyncClient)
     except Exception as e:
         api_logger.error(f"웹훅 작업 상세 조회 실패: {str(e)}")
         raise DatabaseError(f"웹훅 작업 상세 조회 실패: {str(e)}")
+
+async def send_feedback(message: str, user_id: str, supabase: AsyncClient) -> dict:
+    """피드백 전송"""
+    try:
+        res = await supabase.table("feedback").insert({
+            "message": message,
+            "user_id": user_id
+        }).execute()
+        return res.data
+    except Exception as e:
+        api_logger.error(f"피드백 전송 실패: {str(e)}")
+        raise DatabaseError(f"피드백 전송 실패: {str(e)}")

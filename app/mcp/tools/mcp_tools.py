@@ -38,6 +38,11 @@ class MCPTools:
         return await APIService.dispatch(Group.GITHUB_WEBHOOK, action, params)
 
     @staticmethod
+    async def feedback_tool(action: str, params: dict[str, Any]) -> str:
+        """피드백 전송 액션 처리 (send_feedback)"""
+        return await APIService.dispatch(Group.FEEDBACK, action, params)
+    
+    @staticmethod
     def helper(action: str) -> str:
         """요청 형식 예시 반환. action 형식: 'tool_name.action' (예: 'database_tool.create')"""
         return EXAMPLE_MAP.get(action, f"'{action}'에 대한 예시를 찾을 수 없습니다.")

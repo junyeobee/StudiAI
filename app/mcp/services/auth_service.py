@@ -27,18 +27,18 @@ class SupabaseTokenAuth(OAuthProvider):
         """Bearer 토큰을 검증하고 AccessToken 반환."""
         if len(token) < settings.MIN_TOKEN_LENGTH:
             return None
-        print(token)
+
         hashed_token = hashlib.sha256(token.encode()).hexdigest()
-        print(hashed_token)
+        
         # 원본 로직과 동일하게 try-except 없이 직접 호출
         res = await get_user_by_key_hash(hashed_token, self.supabase)
-        print(res)
+        
         if not res or not res.data:
             return None
-        print(res)
+
         user_row = res.data[0]
         user_id = str(user_row.get("user_id", "unknown"))
-        print(user_id)
+
         return AccessToken(
             token=token,
             client_id=user_id,

@@ -8,7 +8,7 @@ from app.utils.logger import api_logger
 from app.core.exceptions import DatabaseError, ValidationError
 from app.services.supa_auth_service import (
     create_user_api_key, 
-    get_user_by_key_hash, 
+    get_user_by_key_hash_async, 
     get_user_api_keys, 
     delete_user_api_key,
     get_integrations_by_user_id,
@@ -74,7 +74,7 @@ async def verify_api_key(api_key: str, supabase: AsyncClient) -> str:
         hashed_key = hashlib.sha256(api_key.encode()).hexdigest()
         
         # DB 레이어 함수 호출
-        res = await get_user_by_key_hash(hashed_key, supabase)
+        res = await get_user_by_key_hash_async(hashed_key, supabase)
         
         if not res or not res.data:
             return None

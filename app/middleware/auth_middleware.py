@@ -59,7 +59,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # 3. API 키 추출 및 사용자 ID 획득
         try:
             api_key = auth_header.split(" ")[1]
-            user_id = await self._get_user_id(api_key)
+            user_id = await self._get_user_id(api_key, request)
             
             if user_id:
                 # request.state에 사용자 정보 설정
@@ -88,11 +88,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 
         return False
     
-    async def _get_user_id(self, api_key: str) -> str | None:
+    async def _get_user_id(self, api_key: str, request: Request) -> str | None:
         """API 키로 사용자 ID 조회 (Redis 캐시 활용)"""
         try:
             # Redis 클라이언트 초기화
-            redis_client = await get_redis()
+            redis_client = await get_redis(request)
             
             # 1. Redis에서 먼저 조회
             user_id = await redis_service.get_user_id(api_key, redis_client)

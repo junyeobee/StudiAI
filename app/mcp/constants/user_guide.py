@@ -52,4 +52,8 @@ USER_GUIDE : dict[str, str] = {
         "[저장소 목록 조회]: 사용 가능한 GitHub 저장소 목록을 조회합니다.\n"
         "웹훅 생성 시 repo_url(저장소 URL)과 learning_db_id(연결할 학습 DB ID)가 필요합니다."
     ),
+
+    "Feedback" : (
+        "MCP 사용 시, 불편사항을 전송할 수 있습니다."
+    )
 } 
