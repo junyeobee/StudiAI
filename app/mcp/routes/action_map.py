@@ -1,6 +1,7 @@
 from app.mcp.models.api import Group, Route, GitHubWebhookCreate
 from app.models.learning import LearningPagesRequest, PageUpdateRequest
 from app.models.database import DatabaseCreate, DatabaseUpdate
+from app.models.feedback import FeedbackRequest
 
 def _const(s: str):
     """상수 경로 반환 람다 래퍼"""
@@ -43,6 +44,9 @@ ACTION_MAP: dict[Group, dict[str, Route]] = {
     Group.GITHUB_WEBHOOK: {
         "create": {"method":"POST", "path":_const("/"), "needs_json":True},
         "repos": {"method":"GET", "path":_const("/repos"), "needs_json":False},
+    },
+    Group.FEEDBACK: {
+        "send_feedback": {"method": "POST", "path": _const("/"), "needs_json": True},
     }
 }
 
@@ -53,4 +57,5 @@ PAYLOAD_MODEL = {
     (Group.DB, "create"): DatabaseCreate,
     (Group.DB, "update"): DatabaseUpdate,
     (Group.GITHUB_WEBHOOK, "create"): GitHubWebhookCreate,
+    (Group.FEEDBACK, "FEEDBACK"): FeedbackRequest,
 } 

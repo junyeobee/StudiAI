@@ -9,6 +9,7 @@ class Group(StrEnum):
     NOTION_SETTINGS = "notion_setting"
     AUTH = "auth"
     GITHUB_WEBHOOK = "github_webhook"
+    FEEDBACK = "feedback"
 
 class Route(TypedDict):
     method: str

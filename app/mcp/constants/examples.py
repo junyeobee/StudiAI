@@ -97,4 +97,8 @@ EXAMPLE_MAP: dict[str, str] = {
     "webhook_tool.detail": (
         "params.operation_id 필수: 특정 웹훅 작업 상세 조회"
     ),
+    "feedback_tool.send_feedback": (
+        "payload.message 필수: 피드백 메시지\n"
+        '{"payload":{"message":"피드백 내용입니다."}}'
+    )
 } 
