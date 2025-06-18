@@ -38,17 +38,25 @@ MCP 서버	Python FastAPI
 AI 연동	MCP 프로토콜, Claude Desktop 호환
 데이터 관리	GitHub API, Notion API
 DB 연동	Supabase(PostgreSQL), Redis (Cache)
+비동기 워커	Redis + RQ
+테스트	pytest
 배포 방식	Docker 기반 서버 배포
 
 📁 Project Structure
 ```
 StudiAI-MCP-Server/
-├── src/
+├── app/
+│ ├── api/ # API 엔드포인트
+│ ├── core/ # 공통 유틸 / 설정
 │ ├── mcp_tools/ # MCP Tools 구현
+│ ├── notion_integration/ # Notion 연동
 │ ├── github_integration/ # GitHub 연동
-│ ├── notion_manager/ # Notion 연동
-│ └── webhooks/ # Webhook 처리
-├── config/ # 설정
+│ ├── supa/ # Supabase 연동
+│ ├── services/ # 서비스 로직
+│ └── worker/ # 비동기 워커 (RQ)
+├── tests/ # 테스트 코드
+├── config/ # 설정 파일
+├── docker/ # Docker 관련 파일
 └── docs/ # 문서
 ```
 
@@ -99,5 +107,3 @@ D --> E[Notion 페이지 업데이트]
 Claude Desktop 및 MCP 호환 클라이언트와 원활히 작동합니다.
 
 MCP 공식: Model Context Protocol
-
-Awesome MCP Servers: GitHub
