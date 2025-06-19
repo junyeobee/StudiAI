@@ -20,6 +20,7 @@
 | 2025-06-04 ~ 2025-06-07 | CI/CD 파이프라인 구축 | GitHub Actions + Pytest + Docker Build 자동화 |
 | 2025-06-08 ~ 2025-06-11 | LLM 로컬 통합 테스트 | Local LLM, Meta-Llama 연동, RQ Task 관리 안정화 |
 | 2025-06-12 ~ 2025-06-16 | MCP Tool 확장 및 Feedback Tool 추가 | Redis 구조 재정비, RPC 트랜잭션화, Feedback 수집 기능 추가 |
+| 2025-06-16 ~ 2025-06-19 | 프로젝트 문서화 | README, 포트폴리오 제작 |
 
 ---
 

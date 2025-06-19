@@ -52,7 +52,7 @@ StudiAI는 사용자와 AI 에이전트, 그리고 외부 서비스(Notion, GitH
 
 ```mermaid
 graph TD
-    subgraph "🤖 MCP 플로우 (AI Agent 기반)"
+    subgraph "🤖 MCP 플로우 (AI Agent)"
         A[👤 User] <--> B(🤖 AI Agent)
         B -- "MCP Request" --> C[MCP Server]
         C -- "인증(Supabase 토큰)" --> D{Action Dispatcher}
@@ -68,8 +68,9 @@ graph TD
         J -- "Webhook Payload" --> K[StudiAI API]
         K -- "Enqueue Job" --> L[Redis Queue]
         L --> M[RQ Worker]
-        M -- "직접 호출" --> N[LLM API]
-        M -- "코드 분석 후" --> O[Notion API]
+        M --> N[LLM API]
+        N -- "분석 결과" --> M
+        M --> O[Notion API]
         O --> H
     end
 
@@ -170,6 +171,10 @@ StudiAI 사용을 위해서는 먼저 Notion 계정 연동이 필요합니다. A
 ### **4️⃣ 새 프로젝트 시작하기**
 AI에게 새 프로젝트를 시작한다고 말하면 자동으로 Notion 데이터베이스를 생성해줍니다. 프로젝트 이름을 지정하면 해당 이름으로 DB가 만들어지고 활성화됩니다.
 
+![Claude Desktop에서 프로젝트 생성하는 모습](images/create-project.gif)
+
+> Claude Desktop에서 "새 Flask 프로젝트 만들어줘"라고 하면 자동으로 Notion DB가 생성됩니다.
+
 > **참고**: 프로젝트/학습 기획을 모두 마친 이후에 DB를 생성하는 것을 권장합니다. 명확한 계획이 있을 때 더 체계적인 관리가 가능합니다. 
 
 ### **5️⃣ 작업 관리하기**
@@ -198,6 +203,18 @@ GitHub 계정 연동 후 프로젝트와 리포지토리 연결을 요청하면,
 - **학습 관리**: 학습 내용 정리 및 체계적 기록
 
 **핵심**: 복잡한 명령어나 도구 이름을 기억할 필요 없이, 자연스러운 대화만으로 모든 프로젝트 관리가 가능합니다.
+
+### **🎬 자동화 시연 예시**
+
+**GitHub 커밋 시 자동 분석 결과:**
+
+**커밋 전:**
+![커밋 전 Notion 페이지](images/before-commit.png)
+
+**커밋 후:**
+![커밋 후 Notion 페이지 - 코드 분석 결과 자동 추가](images/after-commit.png)
+
+> 코드를 커밋하면 자동으로 함수별 분석 결과가 Notion 페이지에 추가됩니다.
 
 ---
 
