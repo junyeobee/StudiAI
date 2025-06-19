@@ -54,36 +54,41 @@ StudiAI는 사용자와 AI 에이전트, 그리고 외부 서비스(Notion, GitH
 graph TD
     subgraph "🤖 MCP 플로우 (AI Agent 기반)"
         A[👤 User] <--> B(🤖 AI Agent)
-        B -- "MCP Request" --> C[MCP Endpoint]
-        C --> D{Action Dispatcher}
-        D --> E[Notion Service]
-        D --> F[GitHub Service]
-        E -- "API Call" --> H[📔 Notion DB]
-        F -- "API Call" --> I[🐙 GitHub Repo]
+        B -- "MCP Request" --> C[MCP Server]
+        C -- "인증(Supabase 토큰)" --> D{Action Dispatcher}
+        D -- "FastAPI 호출" --> E[StudiAI API]
+        E --> F[Notion Service]
+        E --> G[GitHub Service]
+        F -- "API Call" --> H[📔 Notion DB]
+        G -- "API Call" --> I[🐙 GitHub Repo]
     end
 
-    subgraph "🔄 GitHub Webhook 플로우 (자동화)"
+    subgraph "🔄 GitHub Webhook 플로우 (자동화 - MCP 사용 안함)"
         I -- "Push Event" --> J[GitHub Webhook]
         J -- "Webhook Payload" --> K[StudiAI API]
         K -- "Enqueue Job" --> L[Redis Queue]
         L --> M[RQ Worker]
-        M --> N[Code Analysis Service]
-        N --> O[GitHub Webhook Service]
-        O -- "API Call" --> H
+        M -- "직접 호출" --> N[LLM API]
+        M -- "코드 분석 후" --> O[Notion API]
+        O --> H
     end
 
     subgraph "💾 데이터 저장소"
         H[📔 Notion DB]
         I[🐙 GitHub Repo]
         P[Redis Cache]
+        Q[Supabase DB]
     end
 
+    C -.-> Q
     L -.-> P
     style A fill:#e1f5fe
     style H fill:#f3e5f5
     style I fill:#e8f5e8
     style L fill:#fff3e0
     style M fill:#fff3e0
+    style C fill:#f0f0f0
+    style E fill:#e8f5e8
 ```
 
 ## 🔗 MCP란?
@@ -108,12 +113,18 @@ StudiAI는 MCP 서버로서 Claude, Cursor 같은 AI 에이전트들이 Notion, 
 
 ### **Background Jobs**
 - **RQ (Redis Queue)** - 웹훅 이벤트 처리
+- **RQ Worker** - 별도 프로세스로 실행되는 백그라운드 작업 처리기
 - **asyncio** - 비동기 작업
 
 ### **Integrations**
 - **Notion API** - 워크스페이스/데이터베이스 관리
 - **GitHub API** - 리포지토리 연동
+- **OpenAI API** - GPT 4o-mini 모델을 통한 함수별 코드분석
 - **OAuth 2.0** - 사용자 인증
+
+### **Infrastructure**
+- **Docker** - 컨테이너화 (MCP 서버, FastAPI, RQ 서버 분리)
+- **Railway** - 클라우드 호스팅 플랫폼
 
 ---
 
@@ -125,7 +136,20 @@ StudiAI는 **자연스러운 대화**만으로 모든 기능을 사용할 수 �
 
 ## 📋 **시작 전 준비사항**
 
-### **1️⃣ Notion 계정 연동 (필수)**
+### **1️⃣ Claude Desktop MCP 등록 (필수)**
+StudiAI는 원격 MCP 서버로 동작하므로 Claude Desktop에 등록이 필요합니다.
+
+> **중요**: 현재 **Claude Desktop만 지원됩니다.** Cursor는 아직 원격 MCP를 지원하지 않습니다.
+
+**등록 방법:**
+1. Claude Desktop의 **설정 > 통합**으로 이동
+2. "커스텀 통합 추가" 클릭  
+3. StudiAI 서버 URL 입력
+4. 통합 추가 완료
+
+> **요구사항**: Claude Pro, Max, Team, Enterprise 플랜 필요 ([자세한 등록 방법](https://support.anthropic.com/ko/articles/11175166-%EC%9B%90%EA%B2%A9-mcp%EB%A5%BC-%EC%82%AC%EC%9A%A9%ED%95%9C-%EC%82%AC%EC%9A%A9%EC%9E%90-%EC%A0%95%EC%9D%98-%ED%86%B5%ED%95%A9%EC%97%90-%EB%8C%80%ED%95%98%EC%97%AC))
+
+### **2️⃣ Notion 계정 연동 (필수)**
 StudiAI 사용을 위해서는 먼저 Notion 계정 연동이 필요합니다. AI에게 "Notion 연동"을 요청하면 OAuth 인증 링크를 제공하며, 브라우저에서 Notion 로그인을 완료하면 자동으로 계정이 연결됩니다.
 
 > **참고**: 계정 연동 없이는 어떤 기능도 사용할 수 없습니다.
@@ -134,7 +158,7 @@ StudiAI 사용을 위해서는 먼저 Notion 계정 연동이 필요합니다. A
 
 ## 🎯 **초기 설정 (최초 1회)**
 
-### **2️⃣ 워크스페이스와 최상위 페이지 설정**
+### **3️⃣ 워크스페이스와 최상위 페이지 설정**
 계정 연동 후에는 사용할 워크스페이스를 선택하고, 모든 프로젝트 DB가 생성될 최상위 페이지를 지정해야 합니다. AI가 워크스페이스 목록을 보여주면 원하는 것을 선택하고, 마찬가지로 최상위 페이지도 설정하면 됩니다.
 
 **수행 과정**: 워크스페이스 활성화 → 최상위 페이지 지정 → 향후 관리할 모든 프로젝트 DB가 이 페이지 하위에 생성
@@ -143,22 +167,22 @@ StudiAI 사용을 위해서는 먼저 Notion 계정 연동이 필요합니다. A
 
 ## 📂 **일상적인 프로젝트 관리**
 
-### **3️⃣ 새 프로젝트 시작하기**
+### **4️⃣ 새 프로젝트 시작하기**
 AI에게 새 프로젝트를 시작한다고 말하면 자동으로 Notion 데이터베이스를 생성해줍니다. 프로젝트 이름을 지정하면 해당 이름으로 DB가 만들어지고 활성화됩니다.
 
 > **참고**: 프로젝트/학습 기획을 모두 마친 이후에 DB를 생성하는 것을 권장합니다. 명확한 계획이 있을 때 더 체계적인 관리가 가능합니다. 
 
-### **4️⃣ 작업 관리하기**
+### **5️⃣ 작업 관리하기**
 일상적인 작업은 자연스럽게 요청하면 됩니다. "오늘 할 일"을 말하면 페이지가 생성되고, 작업 완료 시 "완료했다"고 말하면 상태가 업데이트됩니다.
 
 ---
 
 ## 🔗 **GitHub 자동화 설정**
 
-### **5️⃣ GitHub 계정 연동**
+### **6️⃣ GitHub 계정 연동**
 GitHub 자동화를 위해서는 GitHub 계정 연동이 필요합니다. Notion 연동과 마찬가지로 OAuth 인증을 통해 진행됩니다.
 
-### **6️⃣ 프로젝트와 리포지토리 연결**
+### **7️⃣ 프로젝트와 리포지토리 연결**
 GitHub 계정 연동 후 프로젝트와 리포지토리 연결을 요청하면, AI가 리포지토리 목록을 보여주고 선택한 저장소에 웹훅을 설정합니다.
 
 **자동화 흐름**: Git Push → GitHub Webhook → StudiAI 자동 분석 → Notion 페이지 업데이트
@@ -180,7 +204,7 @@ GitHub 계정 연동 후 프로젝트와 리포지토리 연결을 요청하면,
 ## 📍 프로젝트 상태
 
 현재 **베타 버전**으로 개인적으로 개발하고 있습니다.
-- 초대받은 사용자만 이용 가능
+- 초대받은 사용자만 이용 가능 (API 사용 비용이 발생하여 사용 제한)
 - 일부 기능이 불안정할 수 있음  
 - 개인 프로젝트라 업데이트가 불규칙할 수 있음
 - 피드백은 언제든 환영합니다 
