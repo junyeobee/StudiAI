@@ -37,86 +37,117 @@ StudiAI는 사용자와 AI 에이전트, 그리고 외부 서비스(Notion, GitH
 
 ```mermaid
 graph TD
-    subgraph User & AI
-        A[👤 User] <--> B(🤖 AI Agent);
+    subgraph "🤖 MCP 플로우 (AI Agent 기반)"
+        A[👤 User] <--> B(🤖 AI Agent)
+        B -- "MCP Request" --> C[MCP Endpoint]
+        C --> D{Action Dispatcher}
+        D --> E[Notion Service]
+        D --> F[GitHub Service]
+        E -- "API Call" --> H[📔 Notion DB]
+        F -- "API Call" --> I[🐙 GitHub Repo]
     end
 
-    subgraph StudiAI Server
-        C[MCP Endpoint] --> D{Action Dispatcher};
-        D --> E[Notion Service];
-        D --> F[GitHub Service];
-        D --> G[Analysis Service];
+    subgraph "🔄 GitHub Webhook 플로우 (자동화)"
+        I -- "Push Event" --> J[GitHub Webhook]
+        J -- "Webhook Payload" --> K[StudiAI API]
+        K -- "Enqueue Job" --> L[Redis Queue]
+        L --> M[RQ Worker]
+        M --> N[Code Analysis Service]
+        N --> O[GitHub Webhook Service]
+        O -- "API Call" --> H
     end
 
-    subgraph External Services
-        H[📔 Notion DB];
-        I[🐙 GitHub Repo];
+    subgraph "💾 데이터 저장소"
+        H[📔 Notion DB]
+        I[🐙 GitHub Repo]
+        P[Redis Cache]
     end
 
-    B -- MCP Request --> C;
-    E <--> H;
-    F <--> I;
-    G -- Code Analysis --> E;
+    L -.-> P
+    style A fill:#e1f5fe
+    style H fill:#f3e5f5
+    style I fill:#e8f5e8
+    style L fill:#fff3e0
+         style M fill:#fff3e0
 ```
 
-## 🤖 AI 에이전트 활용 가이드 (MCP Tools)
+## 🛠️ 기술 스택
 
-StudiAI의 모든 기능은 AI 에이전트에게 특정 `Tool`을 사용하라고 지시하여 실행할 수 있습니다. StudiAI를 처음 사용하신다면, 아래 가이드를 따라 AI 에이전트와 함께 초기 설정을 진행해주세요.
+StudiAI는 현대적이고 확장 가능한 기술 스택을 기반으로 구축되었습니다.
 
----
+### **Backend & API**
+- **FastAPI + Python 3.13** - 비동기 API서버
+- **Model Context Protocol (MCP)** - AI 에이전트 통신 표준 프로토콜(Model Context Protocol)
 
-### **🚀 1단계: 초기 설정 (최초 1회)**
-가장 먼저, StudiAI가 당신의 Notion 계정에 접근하고 작업할 수 있도록 워크스페이스와 기본 페이지를 지정해야 합니다. 이 과정은 최초 한 번만 수행하면 됩니다.
+### **데이터베이스 & 저장소**
+- **Supabase (PostgreSQL)** - 실시간 데이터베이스 및 사용자 인증
+- **Redis** - 캐싱 및 세션 관리
 
-1.  **워크스페이스 연결 및 활성화**
-    *   **명령**: `"내 노션 워크스페이스 목록을 보여줘."`
-    *   **AI 작업**: `notion_settings_tool`의 `workspaces` 액션을 호출하여 연결 가능한 워크스페이스 목록을 확인합니다.
-    *   **명령**: `"'<워크스페이스 이름>' 워크스페이스를 활성화해줘."`
-    *   **AI 작업**: `set_active_workspace` 액션으로 StudiAI가 작업할 기본 워크스페이스를 선택합니다.
+### **비동기 작업 처리**
+- **RQ (Redis Queue)** - GitHub 웹훅 이벤트 백그라운드 처리
+- **asyncio** - 비동기 HTTP 요청 및 병렬 처리
 
-2.  **최상위 페이지(루트) 지정**
-    *   **명령**: `"최상위 페이지로 설정할 수 있는 페이지 목록을 보여줘."`
-    *   **AI 작업**: `notion_settings_tool`의 `top_pages` 액션을 호출하여 루트로 지정할 페이지 후보를 확인합니다.
-    *   **명령**: `"'<페이지 이름>' 페이지를 최상위 페이지로 설정해줘."`
-    *   **AI 작업**: `set_top_page` 액션으로 모든 프로젝트와 학습 DB가 생성될 루트 페이지를 지정합니다. 이 페이지 하위에 모든 데이터가 정리됩니다.
-
----
-
-### **🚀 2단계: 프로젝트/학습 DB 관리 (`database_tool`)**
-초기 설정이 완료되면, 프로젝트나 학습 계획을 담을 Notion 데이터베이스를 생성하고 관리할 수 있습니다.
-
-*   **주요 액션**: `list`, `current`, `create`, `activate`, `deactivate`
-*   **사용 예시**:
-    *   `"연결 가능한 노션 데이터베이스 목록을 보여줘."`
-    *   `"새로운 학습 프로젝트를 위한 데이터베이스를 만들어줘. 이름은 '알고리즘 스터디'로 해줘."`
-    *   `"'알고리즘 스터디' 데이터베이스를 현재 활성 프로젝트로 설정해줘."`
+### **외부 API 연동**
+- **Notion API** - 워크스페이스, 데이터베이스, 페이지 관리
+- **GitHub API** - 리포지토리 정보 및 웹훅 설정
+- **OAuth 2.0** - 안전한 사용자 인증 및 토큰 관리
 
 ---
 
-### **🚀 3단계: 페이지 관리 (`page_tool`)**
-활성화된 데이터베이스 내의 페이지(작업, 학습 노트 등)를 생성하고 관리합니다.
+## 🚀 StudiAI 시작하기 - AI와 함께하는 자연스러운 프로젝트 관리
 
-*   **주요 액션**: `list`, `create`, `update`, `get`
-*   **사용 예시**:
-    *   `"현재 프로젝트에 '백준 1001번 문제 풀이'라는 이름으로 새 페이지를 만들어줘."`
-    *   `"'백준 1001번' 페이지에 '오늘 문제 풀이 완료'라고 내용을 추가해줘."`
-    *   `"현재 프로젝트의 모든 페이지 목록을 보여줘."`
+StudiAI는 **자연스러운 대화**만으로 모든 기능을 사용할 수 있습니다. AI 에이전트(Claude, Cursor 등)와 평소처럼 대화하면, AI가 알아서 적절한 작업을 수행해줍니다.
 
 ---
 
-### **🚀 4단계: GitHub 연동 (`github_webhook_tool`)**
-GitHub 저장소와 Notion을 연결하여 코드 변경 내역을 자동으로 추적합니다.
+## 📋 **시작 전 준비사항**
 
-*   **주요 액션**: `repos`, `create`
-*   **사용 예시**:
-    *   `"내 GitHub 계정에 있는 리포지토리 목록을 가져와줘."`
-    *   `"'my-project' 리포지토리를 현재 노션 프로젝트와 연결해줘. 이제부터 커밋하면 자동으로 기록해줘."`
+### **1️⃣ Notion 계정 연동 (필수)**
+StudiAI 사용을 위해서는 먼저 Notion 계정 연동이 필요합니다. AI에게 "Notion 연동"을 요청하면 OAuth 인증 링크를 제공하며, 브라우저에서 Notion 로그인을 완료하면 자동으로 계정이 연결됩니다.
+
+> **참고**: 계정 연동 없이는 어떤 기능도 사용할 수 없습니다.
 
 ---
 
-### **💡 도움이 필요할 때 (`helper`, `user_guide`)**
-각 도구의 상세한 사용법이 궁금할 때 사용합니다.
+## 🎯 **초기 설정 (최초 1회)**
 
-*   **사용 예시**:
-    *   `"database_tool의 create 액션은 어떻게 사용해? 예시를 보여줘."` (→ `helper` 호출)
-    *   `"페이지 관리에 대한 전체적인 사용자 가이드를 보여줘."` (→ `user_guide` 호출)
+### **2️⃣ 워크스페이스와 최상위 페이지 설정**
+계정 연동 후에는 사용할 워크스페이스를 선택하고, 모든 프로젝트 DB가 생성될 최상위 페이지를 지정해야 합니다. AI가 워크스페이스 목록을 보여주면 원하는 것을 선택하고, 마찬가지로 최상위 페이지도 설정하면 됩니다.
+
+**수행 과정**: 워크스페이스 활성화 → 최상위 페이지 지정 → 향후 관리할 모든 프로젝트 DB가 이 페이지 하위에 생성
+
+---
+
+## 📂 **일상적인 프로젝트 관리**
+
+### **3️⃣ 새 프로젝트 시작하기**
+AI에게 새 프로젝트를 시작한다고 말하면 자동으로 Notion 데이터베이스를 생성해줍니다. 프로젝트 이름을 지정하면 해당 이름으로 DB가 만들어지고 활성화됩니다.
+
+> **참고**: 프로젝트/학습 기획을 모두 마친 이후에 DB를 생성하는 것을 권장합니다. 명확한 계획이 있을 때 더 체계적인 관리가 가능합니다. 
+
+### **4️⃣ 작업 관리하기**
+일상적인 작업은 자연스럽게 요청하면 됩니다. "오늘 할 일"을 말하면 페이지가 생성되고, 작업 완료 시 "완료했다"고 말하면 상태가 업데이트됩니다.
+
+---
+
+## 🔗 **GitHub 자동화 설정**
+
+### **5️⃣ GitHub 계정 연동**
+GitHub 자동화를 위해서는 GitHub 계정 연동이 필요합니다. Notion 연동과 마찬가지로 OAuth 인증을 통해 진행됩니다.
+
+### **6️⃣ 프로젝트와 리포지토리 연결**
+GitHub 계정 연동 후 프로젝트와 리포지토리 연결을 요청하면, AI가 리포지토리 목록을 보여주고 선택한 저장소에 웹훅을 설정합니다.
+
+**자동화 흐름**: Git Push → GitHub Webhook → StudiAI 자동 분석 → Notion 페이지 업데이트
+
+---
+
+## **설정 완료 후 활용**
+
+설정이 완료되면 다음과 같은 방식으로 활용할 수 있습니다:
+- **프로젝트 계획**: 할 일 목록 정리 및 일정 관리
+- **진행 상황 추적**: 현재 프로젝트 상태 확인
+- **코드 분석**: GitHub 커밋 시 자동으로 코드 분석 결과가 Notion에 저장
+- **학습 관리**: 학습 내용 정리 및 체계적 기록
+
+**핵심**: 복잡한 명령어나 도구 이름을 기억할 필요 없이, 자연스러운 대화만으로 모든 프로젝트 관리가 가능합니다.
