@@ -18,6 +18,7 @@
 - [Key Features](#-key-features)
 - [How It Works](#️-how-it-works)
 - [MCP란?](#-mcp란-무엇인가)
+- [제공 도구 (MCP Tools)](#️-제공-도구-mcp-tools)
 - [기술 스택](#️-기술-스택)
 - [StudiAI 시작하기](#-studiai-시작하기---ai와-함께하는-자연스러운-프로젝트-관리)
 - [프로젝트 상태](#-프로젝트-상태)
@@ -101,6 +102,56 @@ graph TD
 StudiAI는 MCP 서버로서 Claude, Cursor 같은 AI 에이전트들이 Notion, GitHub 등의 서비스에 접근할 수 있는 도구들을 제공합니다. 사용자는 AI와 자연스럽게 대화하기만 하면, AI가 MCP를 통해 StudiAI의 기능들을 호출하여 실제 작업을 수행합니다.
 
 **간단히 말해**: AI ↔ MCP ↔ StudiAI ↔ Notion/GitHub 이런 구조로 연결됩니다.
+
+## 🛠️ 제공 도구 (MCP Tools)
+AI 에이전트가 StudiAI를 통해 사용할 수 있는 도구들입니다.
+
+### 노션 데이터베이스 관리 (`database_tool`)
+- `list` - 사용 가능한 모든 노션 데이터베이스 목록 조회
+- `current` - 현재 활성화된 노션 데이터베이스 조회  
+- `create` - 새 프로젝트 노션 데이터베이스 생성
+- `activate` - 특정 노션 데이터베이스 활성화
+- `deactivate` - 현재 노션 데이터베이스 비활성화
+- `update` - 노션 데이터베이스 정보 수정
+
+### 페이지 관리 (`page_tool`)
+- `list` - 노션 페이지 목록 조회 (특정 DB 또는 현재 활성 DB)
+- `create` - 새 노션 페이지 생성
+- `update` - 노션 페이지 상태 및 내용 수정
+- `delete` - 노션 페이지 삭제
+- `get` - 특정 노션 페이지 상세 내용 조회
+- `commits` - 노션 페이지와 연결된 GitHub 커밋 목록 조회
+- `commit_sha` - 특정 커밋 상세 정보 조회
+
+### Notion 설정 (`notion_settings_tool`)
+- `workspaces` - 사용 가능한 노션 워크스페이스 목록 조회
+- `set_active_workspace` - 활성 노션 워크스페이스 설정
+- `top_pages` - 노션 기본 페이지 목록 조회
+- `set_top_page` - 기본 노션 페이지 설정 (모든 DB가 생성될 부모 페이지)
+- `get_top_page` - 현재 설정된 노션 페이지 조회
+
+### 인증 관리 (`auth_tool`)
+- `get_token` - OAuth 토큰 발급 (provider: notion, github)
+
+> **참고**: 토큰은 안전하게 암호화되어 저장되며, StudiAI는 사용자가 허용한 권한 범위 내에서만 Notion/GitHub에 접근합니다.
+
+### GitHub 연동 (`github_webhook_tool`)
+- `repos` - 연동 가능한 GitHub 리포지토리 목록 조회
+- `create` - 리포지토리에 웹훅 생성 및 프로젝트 연결
+
+> **참고**: Github 토큰 OAuth 토큰 발급 이후 연동 가능합니다.
+
+### 웹훅 모니터링 (`webhook_tool`)
+- `list` - 웹훅 작업 이력 조회
+- `failed` - 실패한 웹훅 작업 목록 조회  
+- `detail` - 특정 웹훅 작업 상세 정보 조회
+
+### 피드백 (`feedback_tool`)
+- `send_feedback` - 사용자 피드백 전송
+
+### 🆘 도움말 도구
+- `helper` - 특정 도구 사용법 예시 제공
+- `user_guide` - 기능별 상세 사용자 가이드 제공
 
 ---
 
